@@ -19,6 +19,8 @@ import com.andforce.andclaw.model.ChatMessage
 import com.afwsamples.testdpc.common.Util
 import com.andforce.andclaw.db.ChatMessageDao
 import com.andforce.andclaw.db.ChatMessageEntity
+import com.andforce.andclaw.plan.AgentPlan
+import com.andforce.andclaw.plan.PlanManager
 import com.google.gson.Gson
 import com.andforce.andclaw.bridge.RemoteOutboundHelper
 import com.base.services.BridgeStatus
@@ -81,9 +83,11 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private var lastFingerprint = ""
     private var loopRetryCount = 0
     private var uiState = AgentUiState()
+    private var activePlan: AgentPlan? = null
 
     private val dpmBridge by lazy { DpmBridge(appContext) }
     private lateinit var chatDao: ChatMessageDao
+    private lateinit var planManager: PlanManager
 
     private fun screenshotSuccessMessage(session: RemoteSession?, fileName: String): String {
         val base = "截图已保存：Pictures/Andclaw/$fileName"
@@ -110,6 +114,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         appContext = context.applicationContext
         chatDao = dao
         remoteBridge = bridge
+        planManager = PlanManager(appContext)
         remoteBridge.setTelegramInboundHandler { msg ->
             handleTelegramCommand(msg.chatId, msg.messageId, msg.text)
         }
@@ -352,6 +357,10 @@ object AgentController : ITgBridgeService, IAiConfigService {
         consecutiveSameCount = 0
         lastFingerprint = ""
         loopRetryCount = 0
+        activePlan = planManager.createPlan(input)
+        activePlan?.let { plan ->
+            addMessage("system", "Long-term plan created: ${planManager.planDir(plan).absolutePath}/plan.md")
+        }
 
         Log.d(TAG, "startAgent: provider=${config.provider}, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${Utils.maskKey(config.apiKey)}")
 
@@ -366,6 +375,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         isAgentRunning = false
         uiState = uiState.copy(isRunning = false, status = "Agent Stopped.")
         agentJob?.cancel()
+        activePlan = planManager.markCancelled(activePlan, reason)
         _activeRemoteSession = null
         syncLegacyTgChatIdFromSession(null)
 
@@ -421,7 +431,8 @@ object AgentController : ITgBridgeService, IAiConfigService {
             var response = Utils.callLLMWithHistory(
                 userInput, screenData, historyContext, config, appContext,
                 isDeviceOwner = isDeviceOwner,
-                screenshotBase64 = finalScreenshot
+                screenshotBase64 = finalScreenshot,
+                planContext = planManager.toPromptContext(activePlan)
             )
             var action = Utils.parseAction(response)
 
@@ -433,15 +444,18 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 }
                 response = Utils.callLLMWithHistory(
                     userInput, screenData, retryHistory, config, appContext,
-                    isDeviceOwner = isDeviceOwner
+                    isDeviceOwner = isDeviceOwner,
+                    planContext = planManager.toPromptContext(activePlan)
                 )
                 action = Utils.parseAction(response)
             }
 
             if (action.type == "error") {
                 addMessage("system", "Error occurred: ${action.reason}")
+                activePlan = planManager.recordFailure(activePlan, action.reason ?: "AI returned error", terminal = true)
                 stopAgent(action.reason ?: "AI 返回错误")
             } else {
+                activePlan = planManager.recordAction(activePlan, action)
                 withContext(Dispatchers.Main) {
                     val aiDisplayMessage = "[Progress: ${action.progress ?: "Executing"}]\n${action.reason ?: "Thinking..."}"
                     addMessage("ai", aiDisplayMessage, action)
@@ -478,6 +492,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
             if (loopRetryCount >= 3) {
                 addMessage("system", "Loop detected. Same action [$fingerprint] repeated ${loopRetryCount * 5} times with screenshots. Agent stopped.")
+                activePlan = planManager.recordFailure(activePlan, "Loop detected for action [$fingerprint]", terminal = true)
                 stopAgent("检测到重复操作，已触发循环保护")
                 return
             }
@@ -500,6 +515,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 } ?: false
                 if (isTerminal) {
                     addMessage("system", "Task dispatched via system.")
+                    activePlan = planManager.markDone(activePlan, action.reason ?: "Task dispatched via system")
                     stopAgent("任务已通过系统分发")
                 } else {
                     addMessage("system", "App opened. Waiting for UI to settle...")
@@ -530,6 +546,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 val dpmAction = action.dpmAction
                 if (dpmAction.isNullOrEmpty()) {
                     addMessage("system", "DPM action name missing")
+                    activePlan = planManager.recordFailure(activePlan, "DPM action name missing", terminal = true)
                     stopAgent("DPM action name missing")
                     return
                 }
@@ -549,16 +566,19 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
             AiAction.TYPE_FINISH -> {
                 addMessage("system", "Finished.")
+                activePlan = planManager.markDone(activePlan, action.reason)
                 stopAgent(action.reason ?: "任务完成")
             }
 
             AiAction.TYPE_ERROR -> {
                 addMessage("system", "AI Error: ${action.reason}")
+                activePlan = planManager.recordFailure(activePlan, action.reason ?: "AI returned error", terminal = true)
                 stopAgent(action.reason ?: "AI 返回错误")
             }
 
             else -> {
                 addMessage("system", "Unknown action: ${action.type}")
+                activePlan = planManager.recordFailure(activePlan, "Unknown action: ${action.type}", terminal = true)
                 stopAgent("Unknown action: ${action.type}")
             }
         }
@@ -1001,19 +1021,24 @@ object AgentController : ITgBridgeService, IAiConfigService {
                     }
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { addMessage("system", "Execution Exception: ${e.message}") }
+                withContext(Dispatchers.Main) {
+                    activePlan = planManager.recordFailure(activePlan, "Execution Exception: ${e.message}", terminal = false)
+                    addMessage("system", "Execution Exception: ${e.message}")
+                }
             }
 
             val finalMsg = outputMsg
             if (success && isAgentRunning) {
                 withContext(Dispatchers.Main) {
                     val msg = if (finalMsg != null) "Action success.\n$finalMsg" else "Action success."
+                    activePlan = planManager.recordObservation(activePlan, msg)
                     addMessage("system", msg)
                     addMessage("system", "Waiting for UI to settle...")
                 }
                 continueAfterSuccessfulAction(action)
             } else {
                 withContext(Dispatchers.Main) {
+                    activePlan = planManager.recordFailure(activePlan, finalMsg ?: "Action failed", terminal = true)
                     if (finalMsg != null) addMessage("system", finalMsg)
                     stopAgent(finalMsg ?: "动作执行失败")
                 }

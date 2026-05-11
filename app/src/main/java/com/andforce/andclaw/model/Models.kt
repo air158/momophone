@@ -18,6 +18,12 @@ data class AiAction(
     val progress: String? = null,
 
     /**
+     * 当前长期计划步骤 ID，用于把单步动作归档到可持久化计划中。
+     */
+    @SerializedName("current_step_id")
+    val currentStepId: String? = null,
+
+    /**
      * 执行此操作的原因（以用户语言显示在聊天气泡中）
      */
     @SerializedName("reason")

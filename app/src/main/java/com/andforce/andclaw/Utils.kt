@@ -310,6 +310,7 @@ You MUST output ONLY a raw JSON object. No text before or after. No markdown fen
 Full schema:
 {
   "progress": "Steps completed so far",
+  "current_step_id": "current long-term plan step id, if a plan is provided",
   "reason": "Why this step is needed",
   "type": "intent | click | swipe | long_press | text_input | global_action | screenshot | download | http_request | wait | camera | screen_record | volume | audio_record | wake_screen | ${if (isDeviceOwner) "dpm | " else ""}finish",
   "action": "intent action string (for intent type)",
@@ -430,7 +431,8 @@ CRITICAL: Your entire response must be parseable as JSON. Any non-JSON text will
         config: ApiConfig,
         context: Context,
         isDeviceOwner: Boolean = false,
-        screenshotBase64: String? = null
+        screenshotBase64: String? = null,
+        planContext: String? = null
     ): String = withContext(Dispatchers.IO) {
 
         val errorJsonStub = { message: String ->
@@ -449,6 +451,10 @@ CRITICAL: Your entire response must be parseable as JSON. Any non-JSON text will
 
             Log.d(TAG, "callLLMWithHistory: provider=${config.provider}, isKimi=$isKimi, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${maskKey(config.apiKey)}")
 
+            val planHint = planContext?.takeIf { it.isNotBlank() }?.let {
+                "Long-term Plan Context:\n$it\n\n"
+            }.orEmpty()
+
             val screenHint = if (screenshotBase64 != null) {
                 val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
                 val metrics = DisplayMetrics()
@@ -457,7 +463,7 @@ CRITICAL: Your entire response must be parseable as JSON. Any non-JSON text will
                 val sw = metrics.widthPixels
                 val sh = metrics.heightPixels
 
-                """Current Screen State:
+                """${planHint}Current Screen State:
 $screenData
 
 IMPORTANT — SCREENSHOT ATTACHED (Screen resolution: ${sw}x${sh} pixels)
@@ -469,7 +475,7 @@ BROWSER/WEBVIEW NOTE: If the screenshot shows a browser or web page, rely on the
 Respond with JSON only."""
             }
             else
-                "Current Screen State:\n$screenData\n\nPerform the next step. Respond with JSON only."
+                "${planHint}Current Screen State:\n$screenData\n\nPerform the next step. Respond with JSON only."
 
             if (isKimi) {
                 val kimiMessages = mutableListOf<KimiMessage>()
