@@ -1,5 +1,7 @@
 package com.andforce.andclaw.plan
 
+import com.google.gson.annotations.SerializedName
+
 data class AgentPlan(
     val id: String,
     val goal: String,
@@ -55,3 +57,34 @@ enum class StepType {
     VERIFY,
     DECISION
 }
+
+data class PlanDraft(
+    val summary: String? = null,
+    val steps: List<PlanDraftStep> = emptyList()
+)
+
+data class PlanDraftStep(
+    val id: String? = null,
+    val title: String? = null,
+    val description: String? = null,
+    val type: String? = null
+)
+
+data class PlanPatch(
+    val reason: String? = null,
+    val updates: List<PlanPatchUpdate> = emptyList()
+)
+
+data class PlanPatchUpdate(
+    @SerializedName("step_id")
+    val stepId: String? = null,
+    val status: String? = null,
+    val evidence: String? = null,
+    @SerializedName("last_error")
+    val lastError: String? = null,
+    @SerializedName("insert_after")
+    val insertAfter: String? = null,
+    val step: PlanDraftStep? = null,
+    @SerializedName("current_step_id")
+    val currentStepId: String? = null
+)

@@ -337,6 +337,126 @@ CRITICAL: Your entire response must be parseable as JSON. Any non-JSON text will
 """.trimIndent()
     }
 
+    private fun buildPlannerSystemPrompt(): String = """
+You are the long-term planner for an Android automation agent.
+Return one raw JSON object only. No markdown, no prose.
+
+The plan must be practical for Android UI automation. Keep steps stable enough to survive retries, but not so vague that progress cannot be tracked.
+Use step ids like "step-1", "step-2", "step-3".
+
+Allowed step type values:
+- OBSERVE
+- UI_ACTION
+- API_ACTION
+- VERIFY
+- DECISION
+""".trimIndent()
+
+    private fun buildInitialPlanPrompt(userGoal: String, screenData: String): String = """
+User goal:
+$userGoal
+
+Current screen state:
+$screenData
+
+Create a long-term execution plan for this task.
+
+Output schema:
+{
+  "summary": "short task summary",
+  "steps": [
+    {
+      "id": "step-1",
+      "title": "short step title",
+      "description": "what must be true before this step is done",
+      "type": "OBSERVE|UI_ACTION|API_ACTION|VERIFY|DECISION"
+    }
+  ]
+}
+
+Rules:
+- Include 3 to 8 steps.
+- Include an observation step first when current UI state matters.
+- Include a verification step at the end.
+- Do not include low-level coordinates or exact click actions in the plan.
+- Do not invent credentials, payment authorization, or unsafe permissions.
+""".trimIndent()
+
+    private fun buildPlanPatchPrompt(
+        userGoal: String,
+        screenData: String,
+        planContext: String,
+        reason: String
+    ): String = """
+User goal:
+$userGoal
+
+Existing plan:
+$planContext
+
+Current screen state:
+$screenData
+
+Replan trigger:
+$reason
+
+Return a patch for the existing plan. Prefer small changes over replacing the whole plan.
+
+Output schema:
+{
+  "reason": "why the plan changed",
+  "updates": [
+    {
+      "step_id": "existing step id, optional",
+      "status": "TODO|IN_PROGRESS|DONE|BLOCKED|FAILED|SKIPPED, optional",
+      "evidence": "new evidence, optional",
+      "last_error": "error text, optional",
+      "insert_after": "existing step id, optional",
+      "step": {
+        "id": "new-step-id",
+        "title": "new step title",
+        "description": "what must be true before this step is done",
+        "type": "OBSERVE|UI_ACTION|API_ACTION|VERIFY|DECISION"
+      },
+      "current_step_id": "step to continue from, optional"
+    }
+  ]
+}
+
+Rules:
+- Mark blocked or failed steps explicitly before adding an alternate route.
+- If the original plan is still valid, only set current_step_id and explain why.
+- Do not invent credentials, payment authorization, or unsafe permissions.
+""".trimIndent()
+
+    suspend fun callInitialPlanner(
+        userGoal: String,
+        screenData: String,
+        config: ApiConfig,
+        context: Context
+    ): String = callJsonOnlyLLM(
+        systemPrompt = buildPlannerSystemPrompt(),
+        userPrompt = buildInitialPlanPrompt(userGoal, screenData),
+        config = config,
+        context = context,
+        logLabel = "initialPlanner"
+    )
+
+    suspend fun callPlanPatchPlanner(
+        userGoal: String,
+        screenData: String,
+        planContext: String,
+        reason: String,
+        config: ApiConfig,
+        context: Context
+    ): String = callJsonOnlyLLM(
+        systemPrompt = buildPlannerSystemPrompt(),
+        userPrompt = buildPlanPatchPrompt(userGoal, screenData, planContext, reason),
+        config = config,
+        context = context,
+        logLabel = "planPatchPlanner"
+    )
+
     suspend fun callLLM(prompt: String, config: ApiConfig): String =
         withContext(Dispatchers.IO) {
             val client = OkHttpClient.Builder()
@@ -375,6 +495,72 @@ CRITICAL: Your entire response must be parseable as JSON. Any non-JSON text will
                     .getString("content")
             }
         }
+
+    private suspend fun callJsonOnlyLLM(
+        systemPrompt: String,
+        userPrompt: String,
+        config: ApiConfig,
+        context: Context,
+        logLabel: String
+    ): String = withContext(Dispatchers.IO) {
+        val errorJson = "{\"summary\":\"Planner unavailable\",\"steps\":[]}"
+        try {
+            val isKimi = config.provider.equals("Kimi Code", ignoreCase = true)
+            Log.d(TAG, "$logLabel: provider=${config.provider}, isKimi=$isKimi, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${maskKey(config.apiKey)}")
+            if (isKimi) {
+                return@withContext KimiApiClient.chat(
+                    messages = listOf(KimiMessage("user", userPrompt)),
+                    system = systemPrompt,
+                    apiKey = config.apiKey,
+                    baseUrl = config.apiUrl.ifEmpty { "https://api.kimi.com/coding" },
+                    model = config.model.ifEmpty { "kimi-k2.5" }
+                )
+            }
+
+            val client = OkHttpClient.Builder()
+                .connectTimeout(60, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(60, TimeUnit.SECONDS)
+                .build()
+            val url = if (config.apiUrl.contains("chat/completions")) config.apiUrl
+            else "${config.apiUrl.removeSuffix("/")}/chat/completions"
+            val requestBody = JSONObject().apply {
+                put("model", config.model)
+                put("messages", JSONArray().apply {
+                    put(JSONObject().apply { put("role", "system"); put("content", systemPrompt) })
+                    put(JSONObject().apply { put("role", "user"); put("content", userPrompt) })
+                })
+                if (!config.model.contains("k2.5")) {
+                    put("temperature", 0.0)
+                }
+                put("response_format", JSONObject().put("type", "json_object"))
+            }.toString()
+            val request = Request.Builder()
+                .url(url)
+                .post(requestBody.toRequestBody("application/json".toMediaType()))
+                .header("Authorization", "Bearer ${config.apiKey}")
+                .build()
+            client.newCall(request).execute().use { response ->
+                val responseString = response.body.string()
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "$logLabel API Error ${response.code}: $responseString")
+                    return@withContext errorJson
+                }
+                return@withContext JSONObject(responseString)
+                    .getJSONArray("choices")
+                    .getJSONObject(0)
+                    .getJSONObject("message")
+                    .getString("content")
+            }
+        } catch (e: SocketTimeoutException) {
+            Log.e(TAG, "$logLabel timeout", e)
+            showToastOnMain(context, "Planner timeout. Continuing with fallback plan.")
+            return@withContext errorJson
+        } catch (e: Exception) {
+            Log.e(TAG, "$logLabel failed", e)
+            return@withContext errorJson
+        }
+    }
 
     fun parseAction(rawResponse: String): AiAction {
         val gson = Gson()

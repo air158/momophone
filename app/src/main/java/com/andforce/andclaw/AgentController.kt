@@ -365,6 +365,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         Log.d(TAG, "startAgent: provider=${config.provider}, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${Utils.maskKey(config.apiKey)}")
 
         agentJob = scope.launch {
+            generateInitialPlan(input)
             executeAgentStep(input)
         }
     }
@@ -384,6 +385,36 @@ object AgentController : ITgBridgeService, IAiConfigService {
             scope.launch(Dispatchers.IO) {
                 RemoteOutboundHelper.sendText(remoteBridge, sessionToNotify, "⏹ Agent 已停止$suffix")
             }
+        }
+    }
+
+    private suspend fun generateInitialPlan(input: String) {
+        val screenData = AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        val response = Utils.callInitialPlanner(input, screenData, config, appContext)
+        val draft = planManager.parseDraft(response)
+        val upgraded = planManager.replaceWithDraft(activePlan, draft)
+        if (upgraded != null && upgraded !== activePlan && draft?.steps?.isNotEmpty() == true) {
+            activePlan = upgraded
+            addMessage("system", "Long-term plan generated with ${upgraded.steps.size} steps.")
+        }
+    }
+
+    private suspend fun replanActivePlan(reason: String) {
+        val planContext = planManager.toPromptContext(activePlan) ?: return
+        val screenData = AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        val response = Utils.callPlanPatchPlanner(
+            userGoal = uiState.userInput,
+            screenData = screenData,
+            planContext = planContext,
+            reason = reason,
+            config = config,
+            context = appContext
+        )
+        val patch = planManager.parsePatch(response)
+        val patched = planManager.applyPatch(activePlan, patch)
+        if (patched != null && patch != null) {
+            activePlan = patched
+            addMessage("system", "Long-term plan patched: ${patch.reason ?: reason}")
         }
     }
 
@@ -500,6 +531,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
             scope.launch {
                 val screenshot = captureScreenBase64()
                 addMessage("system", "Loop detected. Action [$fingerprint] repeated 5 times. Taking screenshot for visual analysis... (retry $loopRetryCount/3)", screenshotBase64 = screenshot)
+                replanActivePlan("Loop detected for action [$fingerprint], retry $loopRetryCount/3")
                 executeAgentStep(uiState.userInput, screenshotBase64 = screenshot)
             }
             return
