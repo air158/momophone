@@ -425,6 +425,8 @@ Output schema:
 
 Rules:
 - Mark blocked or failed steps explicitly before adding an alternate route.
+- Preserve the user's original constraints exactly. Do not add new requirements that were not explicitly requested.
+- If a qualifier applies to one object in the goal, do not apply it to a different object. Example: "find an AI-related video, then find the top-liked comment" means the video must be AI-related; the comment itself does not need to be AI-related.
 - If the original plan is still valid, only set current_step_id and explain why.
 - Do not invent credentials, payment authorization, or unsafe permissions.
 """.trimIndent()
@@ -463,6 +465,9 @@ Rules:
 - Mark a step DONE only when the screen/action result gives concrete evidence.
 - If the user goal is fully achieved, set task_complete=true.
 - If blocked by login, missing permission, payment, captcha, unavailable credentials, or unsafe source, set current_step_status=BLOCKED and provide blocker.
+- Preserve the user's original constraints exactly. Do not add new requirements that were not explicitly requested.
+- Do not infer that a previously verified selection is invalid from unrelated downstream content. Example: after selecting an AI-related video, comments do not need to mention AI unless the user explicitly asked for AI-related comments.
+- Treat ordinary uncertainty, weak semantic mismatch, or off-topic-looking comments as IN_PROGRESS, not BLOCKED.
 - If uncertain, keep current_step_status=IN_PROGRESS and keep or choose the most relevant next_step_id.
 - Do not invent screen state that is not present.
 """.trimIndent()

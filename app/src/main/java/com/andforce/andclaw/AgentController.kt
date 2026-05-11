@@ -22,6 +22,7 @@ import com.andforce.andclaw.db.ChatMessageEntity
 import com.andforce.andclaw.plan.AgentPlan
 import com.andforce.andclaw.plan.PlanListItem
 import com.andforce.andclaw.plan.PlanManager
+import com.andforce.andclaw.plan.StepVerification
 import com.google.gson.Gson
 import com.andforce.andclaw.bridge.RemoteOutboundHelper
 import com.base.services.BridgeStatus
@@ -1221,19 +1222,74 @@ object AgentController : ITgBridgeService, IAiConfigService {
         )
         val verification = planManager.parseVerification(response)
         if (verification != null) {
-            activePlan = planManager.applyVerification(activePlan, verification)
-            val evidence = verification.evidence?.takeIf { it.isNotBlank() } ?: "step status updated"
+            val normalizedVerification = normalizeVerifierBlocker(verification)
+            activePlan = planManager.applyVerification(activePlan, normalizedVerification)
+            val evidence = normalizedVerification.evidence?.takeIf { it.isNotBlank() } ?: "step status updated"
             addMessage("system", "Plan verifier: $evidence")
-            if (verification.taskComplete) {
+            if (normalizedVerification.taskComplete) {
                 sendRemotePlanProgress(activePlan, "Plan completed")
-                stopAgent(verification.evidence ?: "任务完成")
+                stopAgent(normalizedVerification.evidence ?: "任务完成")
                 return
             }
             sendRemotePlanProgress(activePlan, "Plan progress")
-            verification.blocker?.takeIf { it.isNotBlank() }?.let { blocker ->
+            normalizedVerification.blocker?.takeIf { it.isNotBlank() }?.let { blocker ->
                 replanActivePlan("Verifier found blocker: $blocker")
             }
         }
+    }
+
+    private fun normalizeVerifierBlocker(verification: StepVerification): StepVerification {
+        val blocker = verification.blocker?.trim().orEmpty()
+        if (blocker.isBlank() || isActionableVerifierBlocker(blocker)) {
+            return verification
+        }
+
+        val evidence = listOfNotNull(
+            verification.evidence?.takeIf { it.isNotBlank() },
+            "Ignored non-actionable verifier blocker: $blocker"
+        ).joinToString(" ")
+
+        return verification.copy(
+            currentStepStatus = when {
+                verification.currentStepStatus.equals("BLOCKED", ignoreCase = true) -> "IN_PROGRESS"
+                verification.currentStepStatus.equals("FAILED", ignoreCase = true) -> "IN_PROGRESS"
+                else -> verification.currentStepStatus
+            },
+            evidence = evidence,
+            blocker = null
+        )
+    }
+
+    private fun isActionableVerifierBlocker(blocker: String): Boolean {
+        val text = blocker.lowercase()
+        val hardBlockerKeywords = listOf(
+            "login",
+            "log in",
+            "sign in",
+            "permission",
+            "captcha",
+            "payment",
+            "credential",
+            "unsafe",
+            "unavailable",
+            "forbidden",
+            "unauthorized",
+            "登录",
+            "登陆",
+            "权限",
+            "验证码",
+            "支付",
+            "付款",
+            "账号",
+            "账户",
+            "密码",
+            "凭证",
+            "不安全",
+            "不可用",
+            "无法访问",
+            "未安装"
+        )
+        return hardBlockerKeywords.any { text.contains(it) }
     }
 
     private fun sendRemotePlanProgress(plan: AgentPlan?, title: String) {

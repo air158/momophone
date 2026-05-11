@@ -285,8 +285,21 @@ class PlanManager(context: Context) {
         if (plan == null) return null
         val current = plan.steps.firstOrNull { it.id == plan.currentStepId }
         val stepLines = plan.steps.joinToString("\n") { step ->
-            "- ${step.id} [${step.status}]: ${step.title} (${step.type})"
+            val details = mutableListOf(
+                "- ${step.id} [${step.status}]: ${step.title} (${step.type})",
+                "  description: ${step.description}"
+            )
+            step.evidence.takeLast(3).forEach { evidence ->
+                details += "  evidence: $evidence"
+            }
+            step.lastError?.takeIf { it.isNotBlank() }?.let { lastError ->
+                details += "  last_error: $lastError"
+            }
+            details.joinToString("\n")
         }
+        val observations = plan.memory.observations.takeLast(5).joinToString("\n") { "- $it" }.ifBlank { "- None" }
+        val decisions = plan.memory.decisions.takeLast(5).joinToString("\n") { "- $it" }.ifBlank { "- None" }
+        val blockers = plan.memory.blockers.takeLast(5).joinToString("\n") { "- $it" }.ifBlank { "- None" }
         return """
 Long-term plan id: ${plan.id}
 Plan status: ${plan.status}
@@ -295,7 +308,18 @@ Current step: ${current?.id ?: "none"} - ${current?.title ?: "none"}
 Steps:
 $stepLines
 
-Use current_step_id in your JSON response. If the current step is complete, continue with the next unfinished step. If the plan no longer fits the observed screen, explain the blocker in reason and choose a safer next action.
+Recent observations:
+$observations
+
+Recent decisions:
+$decisions
+
+Recent blockers:
+$blockers
+
+Use current_step_id in your JSON response. If the current step is complete, continue with the next unfinished step.
+Preserve the user's original goal wording exactly. Do not add new semantic requirements while verifying or executing later steps.
+If the plan no longer fits the observed screen, explain the blocker in reason and choose a safer next action.
 	""".trimIndent()
     }
 
