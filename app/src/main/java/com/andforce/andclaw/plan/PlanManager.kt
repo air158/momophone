@@ -321,6 +321,34 @@ Steps:
 $stepLines
 
 Use current_step_id in your JSON response. If the current step is complete, continue with the next unfinished step. If the plan no longer fits the observed screen, explain the blocker in reason and choose a safer next action.
+	""".trimIndent()
+    }
+
+    fun formatProgress(plan: AgentPlan?, title: String? = null): String? {
+        if (plan == null) return null
+        val done = plan.steps.count { it.status == StepStatus.DONE || it.status == StepStatus.SKIPPED }
+        val total = plan.steps.size.coerceAtLeast(1)
+        val percent = done * 100 / total
+        val current = plan.steps.firstOrNull { it.id == plan.currentStepId }
+        val stepLines = plan.steps.joinToString("\n") { step ->
+            val marker = when (step.status) {
+                StepStatus.DONE -> "[x]"
+                StepStatus.IN_PROGRESS -> "[>]"
+                StepStatus.BLOCKED -> "[!]"
+                StepStatus.FAILED -> "[failed]"
+                StepStatus.SKIPPED -> "[-]"
+                StepStatus.TODO -> "[ ]"
+            }
+            "$marker ${step.id}: ${step.title}"
+        }
+        val heading = title?.takeIf { it.isNotBlank() } ?: "Plan progress"
+        return """
+$heading
+Status: ${plan.status}
+Progress: $done/$total ($percent%)
+Current: ${current?.id ?: "none"} - ${current?.title ?: "none"}
+
+$stepLines
 """.trimIndent()
     }
 

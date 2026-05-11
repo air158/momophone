@@ -371,6 +371,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         activePlan = planManager.createPlan(input)
         activePlan?.let { plan ->
             addMessage("system", "Long-term plan created: ${planManager.planDir(plan).absolutePath}/plan.md")
+            sendRemotePlanProgress(plan, "Plan created")
         }
 
         Log.d(TAG, "startAgent: provider=${config.provider}, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${Utils.maskKey(config.apiKey)}")
@@ -406,6 +407,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         loopRetryCount = 0
         ordinaryFailureReplanCount = 0
         addMessage("system", "Resuming plan: ${plan.summary}")
+        sendRemotePlanProgress(plan, "Plan resumed")
         agentJob = scope.launch {
             executeAgentStep(plan.goal)
         }
@@ -437,6 +439,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         if (upgraded != null && upgraded !== activePlan && draft?.steps?.isNotEmpty() == true) {
             activePlan = upgraded
             addMessage("system", "Long-term plan generated with ${upgraded.steps.size} steps.")
+            sendRemotePlanProgress(upgraded, "Plan generated")
         }
     }
 
@@ -456,6 +459,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         if (patched != null && patch != null) {
             activePlan = patched
             addMessage("system", "Long-term plan patched: ${patch.reason ?: reason}")
+            sendRemotePlanProgress(patched, "Plan updated")
         }
     }
 
@@ -1164,12 +1168,22 @@ object AgentController : ITgBridgeService, IAiConfigService {
             val evidence = verification.evidence?.takeIf { it.isNotBlank() } ?: "step status updated"
             addMessage("system", "Plan verifier: $evidence")
             if (verification.taskComplete) {
+                sendRemotePlanProgress(activePlan, "Plan completed")
                 stopAgent(verification.evidence ?: "任务完成")
                 return
             }
+            sendRemotePlanProgress(activePlan, "Plan progress")
             verification.blocker?.takeIf { it.isNotBlank() }?.let { blocker ->
                 replanActivePlan("Verifier found blocker: $blocker")
             }
+        }
+    }
+
+    private fun sendRemotePlanProgress(plan: AgentPlan?, title: String) {
+        val session = activeRemoteSession ?: return
+        val text = planManager.formatProgress(plan, title) ?: return
+        scope.launch(Dispatchers.IO) {
+            RemoteOutboundHelper.sendText(remoteBridge, session, text)
         }
     }
 
