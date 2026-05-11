@@ -201,7 +201,7 @@ Tap a specific UI element from the current UI tree.
 - The UI tree includes label, role, package, window_type, clickable/editable flags, bounds, click_bounds, and center.
 - For text rows inside a clickable parent, click_bounds/center is the actionable parent area.
 - Do NOT treat search suggestion rows as the search/submit button. Search suggestions usually contain the query text and are list items; the submit button usually has a label/description like "Search", "搜索", "Go", "Enter", or a keyboard action. If the goal is to search for a phrase, first click the search input, use text_input for the exact phrase, then click the real submit/search button or press the keyboard search action if visible.
-- When submitting a comment/reply/post/message after text input, do NOT click a "发送/Send" key from window_type:INPUT_METHOD. That is the keyboard/IME area and may insert a newline. Re-check the app content and click the app's own send/post/comment button outside the keyboard.
+- NEVER click anything from window_type:INPUT_METHOD. That is the keyboard/IME area and may insert a newline or type an unintended key. Use text_input for typing. For submitting a comment/reply/post/message after text input, click the app's own send/post/comment button outside the keyboard.
 - When multiple nearby targets look similar, use the exact label/description from the UI tree in target_text. For example, if the goal is "AI视频", do not click an element whose label is "AI助手".
 
 === SWIPE ===

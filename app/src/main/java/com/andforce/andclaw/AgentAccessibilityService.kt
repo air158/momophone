@@ -56,7 +56,11 @@ class AgentAccessibilityService : AccessibilityService() {
         val nextId = intArrayOf(1)
         val interactiveWindows = windows.orEmpty()
             .filter { it.root != null }
-            .sortedWith(compareByDescending<AccessibilityWindowInfo> { it.isActive }.thenByDescending { it.isFocused })
+            .sortedWith(
+                compareBy<AccessibilityWindowInfo> { windowPromptRank(it.type) }
+                    .thenByDescending { it.isActive }
+                    .thenByDescending { it.isFocused }
+            )
 
         if (interactiveWindows.isNotEmpty()) {
             interactiveWindows.forEach { window ->
@@ -137,6 +141,13 @@ class AgentAccessibilityService : AccessibilityService() {
         else -> type.toString()
     }
 
+    private fun windowPromptRank(type: Int): Int = when (type) {
+        AccessibilityWindowInfo.TYPE_APPLICATION -> 0
+        AccessibilityWindowInfo.TYPE_SYSTEM -> 1
+        AccessibilityWindowInfo.TYPE_INPUT_METHOD -> 2
+        else -> 3
+    }
+
     private fun escapeUiValue(value: String): String =
         value.replace("\\", "\\\\")
             .replace("'", "\\'")
@@ -148,22 +159,19 @@ class AgentAccessibilityService : AccessibilityService() {
         return clickAndWaitForCompletion(snapshot.clickBounds.centerX(), snapshot.clickBounds.centerY())
     }
 
-    fun blockedInputMethodSubmitReason(nodeId: Int?, x: Int, y: Int, targetText: String?): String? {
-        val target = targetText?.trim().orEmpty()
+    fun blockedInputMethodClickReason(nodeId: Int?, x: Int, y: Int, targetText: String?): String? {
         val snapshot = nodeId?.let { lastNodeSnapshots[it] }
-        val label = snapshot?.label.orEmpty()
-        val shouldProtect = isSubmitLikeText(target) || (target.isEmpty() && isSubmitLikeText(label))
-        if (!shouldProtect) return null
-
         val inputMethodHit = if (snapshot != null) {
-            snapshot.windowType == AccessibilityWindowInfo.TYPE_INPUT_METHOD
+            snapshot.isInputMethodNode()
         } else {
             isPointInInputMethodWindow(x, y)
         }
         if (!inputMethodHit) return null
 
+        val target = targetText?.trim().orEmpty()
+        val label = snapshot?.label.orEmpty()
         val text = target.ifBlank { label.ifBlank { "submit" } }
-        return "Click blocked: '$text' is in the input-method keyboard window, not the app content. Re-check the UI tree/screenshot and choose the app's comment/post/send button outside the keyboard."
+        return "Click blocked: '$text' is in the input-method keyboard window. Use text_input for typing; for submitting a comment/reply/post, re-check the UI tree/screenshot and choose the app's own send/post/comment button outside the keyboard."
     }
 
     fun describeNodeAt(x: Int, y: Int): String? {
@@ -180,12 +188,6 @@ class AgentAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun isSubmitLikeText(text: String): Boolean {
-        if (text.isBlank()) return false
-        val normalized = text.trim().lowercase()
-        return listOf("发送", "发布", "评论", "send", "post", "comment", "reply").any { normalized.contains(it) }
-    }
-
     private fun isPointInInputMethodWindow(x: Int, y: Int): Boolean =
         windows.orEmpty().any { window ->
             if (window.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD) return@any false
@@ -193,6 +195,23 @@ class AgentAccessibilityService : AccessibilityService() {
             window.getBoundsInScreen(rect)
             rect.contains(x, y)
         }
+
+    private fun UiNodeSnapshot.isInputMethodNode(): Boolean =
+        windowType == AccessibilityWindowInfo.TYPE_INPUT_METHOD ||
+            isInputMethodPackage(packageName) ||
+            className.contains("keyboard", ignoreCase = true) ||
+            className.contains("inputmethod", ignoreCase = true)
+
+    private fun isInputMethodPackage(packageName: String?): Boolean {
+        val pkg = packageName?.lowercase().orEmpty()
+        return pkg.contains("inputmethod") ||
+            pkg.contains("keyboard") ||
+            pkg.contains("latin") ||
+            pkg == "com.google.android.inputmethod.latin" ||
+            pkg == "com.sohu.inputmethod.sogou" ||
+            pkg == "com.baidu.input" ||
+            pkg == "com.iflytek.inputmethod"
+    }
 
     fun doesNodeAtMatchTarget(x: Int, y: Int, targetText: String): Boolean {
         val root = rootInActiveWindow ?: return true

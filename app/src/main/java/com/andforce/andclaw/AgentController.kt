@@ -734,7 +734,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                         } else {
                             val targetText = action.targetText?.trim().orEmpty()
                             val inputMethodBlock = withContext(Dispatchers.Main) {
-                                svc.blockedInputMethodSubmitReason(action.nodeId, action.x, action.y, targetText)
+                                svc.blockedInputMethodClickReason(action.nodeId, action.x, action.y, targetText)
                             }
                             if (inputMethodBlock != null) {
                                 outputMsg = inputMethodBlock
