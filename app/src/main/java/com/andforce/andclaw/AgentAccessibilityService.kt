@@ -14,6 +14,7 @@ import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.concurrent.Executor
@@ -39,6 +40,8 @@ class AgentAccessibilityService : AccessibilityService() {
         val clickBounds: Rect,
         val className: String,
         val viewId: String?,
+        val packageName: String?,
+        val windowType: Int,
         val clickable: Boolean,
         val editable: Boolean,
         val enabled: Boolean,
@@ -48,10 +51,23 @@ class AgentAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() { instance = this }
 
     fun captureScreenHierarchy(): String {
-        val root = rootInActiveWindow ?: return "Empty Screen"
         val sb = StringBuilder()
         val snapshots = mutableListOf<UiNodeSnapshot>()
-        parseNode(root, sb, snapshots, nextId = intArrayOf(1), clickableAncestorBounds = null)
+        val nextId = intArrayOf(1)
+        val interactiveWindows = windows.orEmpty()
+            .filter { it.root != null }
+            .sortedWith(compareByDescending<AccessibilityWindowInfo> { it.isActive }.thenByDescending { it.isFocused })
+
+        if (interactiveWindows.isNotEmpty()) {
+            interactiveWindows.forEach { window ->
+                val root = window.root ?: return@forEach
+                sb.append("Window{type:${windowTypeName(window.type)}, active:${window.isActive}, focused:${window.isFocused}}\n")
+                parseNode(root, sb, snapshots, nextId, clickableAncestorBounds = null, windowType = window.type)
+            }
+        } else {
+            val root = rootInActiveWindow ?: return "Empty Screen"
+            parseNode(root, sb, snapshots, nextId, clickableAncestorBounds = null, windowType = 0)
+        }
         lastNodeSnapshots = snapshots.associateBy { it.id }
         return sb.toString()
     }
@@ -61,7 +77,8 @@ class AgentAccessibilityService : AccessibilityService() {
         sb: StringBuilder,
         snapshots: MutableList<UiNodeSnapshot>,
         nextId: IntArray,
-        clickableAncestorBounds: Rect?
+        clickableAncestorBounds: Rect?,
+        windowType: Int
     ) {
         node ?: return
         val rect = Rect()
@@ -83,6 +100,8 @@ class AgentAccessibilityService : AccessibilityService() {
                 clickBounds = Rect(clickBounds),
                 className = className,
                 viewId = node.viewIdResourceName,
+                packageName = node.packageName?.toString(),
+                windowType = windowType,
                 clickable = node.isClickable || clickableAncestorBounds != null,
                 editable = node.isEditable,
                 enabled = node.isEnabled,
@@ -95,6 +114,8 @@ class AgentAccessibilityService : AccessibilityService() {
                 "{id:$id, role:'${escapeUiValue(className.substringAfterLast('.'))}', " +
                     "label:'${escapeUiValue(label.ifBlank { "(no label)" })}', " +
                     "view_id:'${escapeUiValue(node.viewIdResourceName.orEmpty())}', " +
+                    "package:'${escapeUiValue(node.packageName?.toString().orEmpty())}', " +
+                    "window_type:${windowTypeName(windowType)}, " +
                     "clickable:${snapshot.clickable}, editable:${node.isEditable}, enabled:${node.isEnabled}, focused:${node.isFocused}, " +
                     "bounds:[${rect.left},${rect.top},${rect.right},${rect.bottom}], " +
                     "click_bounds:[${clickBounds.left},${clickBounds.top},${clickBounds.right},${clickBounds.bottom}], " +
@@ -103,8 +124,17 @@ class AgentAccessibilityService : AccessibilityService() {
         }
         val nextClickableAncestor = ownClickableBounds ?: clickableAncestorBounds
         for (i in 0 until node.childCount) {
-            parseNode(node.getChild(i), sb, snapshots, nextId, nextClickableAncestor)
+            parseNode(node.getChild(i), sb, snapshots, nextId, nextClickableAncestor, windowType)
         }
+    }
+
+    private fun windowTypeName(type: Int): String = when (type) {
+        AccessibilityWindowInfo.TYPE_APPLICATION -> "APPLICATION"
+        AccessibilityWindowInfo.TYPE_INPUT_METHOD -> "INPUT_METHOD"
+        AccessibilityWindowInfo.TYPE_SYSTEM -> "SYSTEM"
+        AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> "ACCESSIBILITY_OVERLAY"
+        AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER -> "SPLIT_SCREEN_DIVIDER"
+        else -> type.toString()
     }
 
     private fun escapeUiValue(value: String): String =
@@ -118,6 +148,24 @@ class AgentAccessibilityService : AccessibilityService() {
         return clickAndWaitForCompletion(snapshot.clickBounds.centerX(), snapshot.clickBounds.centerY())
     }
 
+    fun blockedInputMethodSubmitReason(nodeId: Int?, x: Int, y: Int, targetText: String?): String? {
+        val target = targetText?.trim().orEmpty()
+        val snapshot = nodeId?.let { lastNodeSnapshots[it] }
+        val label = snapshot?.label.orEmpty()
+        val shouldProtect = isSubmitLikeText(target) || (target.isEmpty() && isSubmitLikeText(label))
+        if (!shouldProtect) return null
+
+        val inputMethodHit = if (snapshot != null) {
+            snapshot.windowType == AccessibilityWindowInfo.TYPE_INPUT_METHOD
+        } else {
+            isPointInInputMethodWindow(x, y)
+        }
+        if (!inputMethodHit) return null
+
+        val text = target.ifBlank { label.ifBlank { "submit" } }
+        return "Click blocked: '$text' is in the input-method keyboard window, not the app content. Re-check the UI tree/screenshot and choose the app's comment/post/send button outside the keyboard."
+    }
+
     fun describeNodeAt(x: Int, y: Int): String? {
         val root = rootInActiveWindow ?: return null
         return findDeepestNodeAt(root, x, y)?.let { node ->
@@ -127,9 +175,24 @@ class AgentAccessibilityService : AccessibilityService() {
             val description = node.contentDescription?.toString().orEmpty()
             val label = listOf(text, description).filter { it.isNotBlank() }.distinct().joinToString(" | ")
             val className = node.className?.toString().orEmpty().substringAfterLast('.')
-            "label='${escapeUiValue(label)}', role='${escapeUiValue(className)}', bounds=[${rect.left},${rect.top},${rect.right},${rect.bottom}]"
+            val windowType = node.window?.type ?: 0
+            "label='${escapeUiValue(label)}', role='${escapeUiValue(className)}', package='${escapeUiValue(node.packageName?.toString().orEmpty())}', window_type=${windowTypeName(windowType)}, bounds=[${rect.left},${rect.top},${rect.right},${rect.bottom}]"
         }
     }
+
+    private fun isSubmitLikeText(text: String): Boolean {
+        if (text.isBlank()) return false
+        val normalized = text.trim().lowercase()
+        return listOf("发送", "发布", "评论", "send", "post", "comment", "reply").any { normalized.contains(it) }
+    }
+
+    private fun isPointInInputMethodWindow(x: Int, y: Int): Boolean =
+        windows.orEmpty().any { window ->
+            if (window.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD) return@any false
+            val rect = Rect()
+            window.getBoundsInScreen(rect)
+            rect.contains(x, y)
+        }
 
     fun doesNodeAtMatchTarget(x: Int, y: Int, targetText: String): Boolean {
         val root = rootInActiveWindow ?: return true

@@ -733,7 +733,12 @@ object AgentController : ITgBridgeService, IAiConfigService {
                             outputMsg = "Accessibility service not running"
                         } else {
                             val targetText = action.targetText?.trim().orEmpty()
-                            if (action.nodeId != null) {
+                            val inputMethodBlock = withContext(Dispatchers.Main) {
+                                svc.blockedInputMethodSubmitReason(action.nodeId, action.x, action.y, targetText)
+                            }
+                            if (inputMethodBlock != null) {
+                                outputMsg = inputMethodBlock
+                            } else if (action.nodeId != null) {
                                 success = withContext(Dispatchers.Main) {
                                     svc.clickNodeAndWaitForCompletion(action.nodeId)
                                 }

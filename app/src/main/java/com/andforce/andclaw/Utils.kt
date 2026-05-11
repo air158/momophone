@@ -36,6 +36,12 @@ object Utils {
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    private val openAiCompatibleClient = OkHttpClient.Builder()
+        .connectTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .build()
+
     /**
      * Agent 「http_request」动作：发起 HTTP/HTTPS 请求。
      * 返回 [Pair.first]=true 表示已收到 HTTP 响应（含 4xx/5xx）；仅连接/IO 失败时为 false。
@@ -192,9 +198,10 @@ Launch by package only: action:"android.intent.action.MAIN", package_name:"com.e
 Tap a specific UI element from the current UI tree.
 - Prefer node_id: {"type":"click","node_id":12,"target_text":"Search"}
 - If node_id is unavailable, use x/y at the CENTER of the target and include "target_text" for safety validation.
-- The UI tree includes label, role, clickable/editable flags, bounds, click_bounds, and center.
+- The UI tree includes label, role, package, window_type, clickable/editable flags, bounds, click_bounds, and center.
 - For text rows inside a clickable parent, click_bounds/center is the actionable parent area.
 - Do NOT treat search suggestion rows as the search/submit button. Search suggestions usually contain the query text and are list items; the submit button usually has a label/description like "Search", "搜索", "Go", "Enter", or a keyboard action. If the goal is to search for a phrase, first click the search input, use text_input for the exact phrase, then click the real submit/search button or press the keyboard search action if visible.
+- When submitting a comment/reply/post/message after text input, do NOT click a "发送/Send" key from window_type:INPUT_METHOD. That is the keyboard/IME area and may insert a newline. Re-check the app content and click the app's own send/post/comment button outside the keyboard.
 - When multiple nearby targets look similar, use the exact label/description from the UI tree in target_text. For example, if the goal is "AI视频", do not click an element whose label is "AI助手".
 
 === SWIPE ===
@@ -517,10 +524,6 @@ Rules:
 
     suspend fun callLLM(prompt: String, config: ApiConfig): String =
         withContext(Dispatchers.IO) {
-            val client = OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .build()
-
             // 统一转换为 OpenAI 兼容格式 (Gemini 1.5 现已支持 OpenAI 格式)
             val requestBody = JSONObject().apply {
                 put("model", config.model)
@@ -541,7 +544,7 @@ Rules:
                 .header("Authorization", "Bearer ${config.apiKey}")
                 .build()
 
-            client.newCall(request).execute().use { response ->
+            openAiCompatibleClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) throw Exception("API Error: ${response.code}")
                 val body = response.body.string()
 
@@ -575,11 +578,6 @@ Rules:
                 )
             }
 
-            val client = OkHttpClient.Builder()
-                .connectTimeout(60, TimeUnit.SECONDS)
-                .readTimeout(60, TimeUnit.SECONDS)
-                .writeTimeout(60, TimeUnit.SECONDS)
-                .build()
             val url = if (config.apiUrl.contains("chat/completions")) config.apiUrl
             else "${config.apiUrl.removeSuffix("/")}/chat/completions"
             val requestBody = JSONObject().apply {
@@ -598,7 +596,7 @@ Rules:
                 .post(requestBody.toRequestBody("application/json".toMediaType()))
                 .header("Authorization", "Bearer ${config.apiKey}")
                 .build()
-            client.newCall(request).execute().use { response ->
+            openAiCompatibleClient.newCall(request).execute().use { response ->
                 val responseString = response.body.string()
                 if (!response.isSuccessful) {
                     Log.e(TAG, "$logLabel API Error ${response.code}: $responseString")
@@ -684,12 +682,6 @@ Rules:
         }
 
         try {
-            val client = OkHttpClient.Builder()
-                .connectTimeout(60, TimeUnit.SECONDS)
-                .readTimeout(60, TimeUnit.SECONDS)
-                .writeTimeout(60, TimeUnit.SECONDS)
-                .build()
-
             val systemPrompt = buildAgentSystemPrompt(userGoal, isDeviceOwner)
             val isKimi = config.provider.equals("Kimi Code", ignoreCase = true)
 
@@ -794,7 +786,7 @@ Respond with JSON only."""
                 .header("Authorization", "Bearer ${config.apiKey}")
                 .build()
 
-            client.newCall(request).execute().use { response ->
+            openAiCompatibleClient.newCall(request).execute().use { response ->
                 val responseString = response.body.string()
                 if (!response.isSuccessful) {
                     Log.e(TAG, "OpenAI API Error ${response.code}: $responseString")
