@@ -9,11 +9,15 @@ import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.concurrent.Executor
+import kotlin.coroutines.resume
 
 @SuppressLint("AccessibilityPolicy")
 class AgentAccessibilityService : AccessibilityService() {
@@ -21,6 +25,9 @@ class AgentAccessibilityService : AccessibilityService() {
         var instance: AgentAccessibilityService? = null
         private const val TAG = "AiAccessibility"
     }
+
+    @Volatile
+    private var lastUiEventAt: Long = 0L
 
     override fun onServiceConnected() { instance = this }
 
@@ -56,6 +63,78 @@ class AgentAccessibilityService : AccessibilityService() {
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs)).build()
         dispatchGesture(gesture, null, null)
+    }
+
+    suspend fun clickAndWaitForCompletion(x: Int, y: Int): Boolean {
+        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 50)).build()
+        return dispatchGestureAwait(gesture)
+    }
+
+    suspend fun swipeAndWaitForCompletion(
+        startX: Int,
+        startY: Int,
+        endX: Int,
+        endY: Int,
+        durationMs: Long = 300
+    ): Boolean {
+        val path = Path().apply {
+            moveTo(startX.toFloat(), startY.toFloat())
+            lineTo(endX.toFloat(), endY.toFloat())
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs)).build()
+        return dispatchGestureAwait(gesture)
+    }
+
+    suspend fun longPressAndWaitForCompletion(x: Int, y: Int, durationMs: Long = 1000): Boolean {
+        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs)).build()
+        return dispatchGestureAwait(gesture)
+    }
+
+    private suspend fun dispatchGestureAwait(gesture: GestureDescription): Boolean =
+        suspendCancellableCoroutine { cont ->
+            val accepted = dispatchGesture(
+                gesture,
+                object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription?) {
+                        if (cont.isActive) cont.resume(true)
+                    }
+
+                    override fun onCancelled(gestureDescription: GestureDescription?) {
+                        if (cont.isActive) cont.resume(false)
+                    }
+                },
+                null
+            )
+            if (!accepted && cont.isActive) cont.resume(false)
+        }
+
+    suspend fun waitForUiStabilization(
+        timeoutMs: Long = 1200,
+        quietMs: Long = 180,
+        minWaitMs: Long = 220,
+        pollMs: Long = 40
+    ) {
+        val startedAt = SystemClock.uptimeMillis()
+        val deadline = startedAt + timeoutMs.coerceAtLeast(0L)
+        val minUntil = startedAt + minWaitMs.coerceAtLeast(0L)
+        var sawEvent = false
+
+        while (SystemClock.uptimeMillis() < deadline) {
+            val eventAt = lastUiEventAt
+            val now = SystemClock.uptimeMillis()
+            if (eventAt >= startedAt) {
+                sawEvent = true
+                if (now >= minUntil && now - eventAt >= quietMs) return
+            } else if (!sawEvent && now >= minUntil) {
+                return
+            }
+            delay(pollMs)
+        }
     }
 
     fun longPress(x: Int, y: Int, durationMs: Long = 1000) {
@@ -158,6 +237,19 @@ class AgentAccessibilityService : AccessibilityService() {
         )
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_SCROLLED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+                lastUiEventAt = SystemClock.uptimeMillis()
+            }
+        }
+    }
     override fun onInterrupt() {}
 }

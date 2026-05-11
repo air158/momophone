@@ -230,9 +230,9 @@ Example POST: {"type":"http_request","data":"https://api.example.com/v1/login","
 
 === WAIT ===
 Wait for a page to finish loading or a UI transition to complete, then re-check the screen.
-Optional "duration" in ms (default 3000, max 10000).
+Optional "duration" in ms (default 1000, max 10000).
 Use this when the screen shows loading indicators, spinners, or "努力加载中" style messages.
-Example: {"type":"wait","progress":"商家页面加载中","reason":"页面正在加载，等待完成后继续","duration":3000}
+Example: {"type":"wait","progress":"商家页面加载中","reason":"页面正在加载，等待完成后继续","duration":1000}
 
 === CAMERA ===
 Take photos or record videos using the device camera. Use "camera_action" field:

@@ -45,6 +45,9 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
     private const val TAG = "AgentController"
     private const val PREFS_NAME = "agent_config"
+    private const val DEFAULT_PROVIDER = "momoai"
+    private const val LEGACY_KIMI_URL = "https://api.kimi.com/coding"
+    private const val LEGACY_KIMI_MODEL = "kimi-k2.5"
 
     private lateinit var appContext: Context
     private lateinit var remoteBridge: IRemoteBridgeService
@@ -154,17 +157,22 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private fun restoreConfig() {
         val prefs = getPrefs()
         val savedProvider = prefs.getString("ai_provider", null)
+        val provider = DEFAULT_PROVIDER
         val apiKey = if (savedProvider != null) {
             prefs.getString("ai_api_key", null)
                 ?: loadProviderKey(savedProvider)
         } else {
-            loadProviderKey("Kimi Code").ifEmpty { config.apiKey }
+            loadProviderKey(provider).ifEmpty { config.apiKey }
         }
         config = ApiConfig(
-            provider = savedProvider ?: config.provider,
+            provider = provider,
             apiKey = apiKey,
-            apiUrl = prefs.getString("ai_api_url", config.apiUrl) ?: config.apiUrl,
-            model = prefs.getString("ai_model", config.model) ?: config.model
+            apiUrl = prefs.getString("ai_api_url", config.apiUrl)
+                ?.takeUnless { savedProvider != provider && it == LEGACY_KIMI_URL }
+                ?: config.apiUrl,
+            model = prefs.getString("ai_model", config.model)
+                ?.takeUnless { savedProvider != provider && it == LEGACY_KIMI_MODEL }
+                ?: config.model
         )
         Log.d(TAG, "restoreConfig: provider=${config.provider}, apiKey=${Utils.maskKey(config.apiKey)}")
     }
@@ -348,7 +356,6 @@ object AgentController : ITgBridgeService, IAiConfigService {
         Log.d(TAG, "startAgent: provider=${config.provider}, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${Utils.maskKey(config.apiKey)}")
 
         agentJob = scope.launch {
-            delay(1500)
             executeAgentStep(input)
         }
     }
@@ -488,7 +495,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                     addMessage("system", "App opened, checking next step...")
                     isAgentRunning = true
                     scope.launch {
-                        delay(3000)
+                        waitAfterSuccessfulAction(action)
                         executeAgentStep(uiState.userInput)
                     }
                 }
@@ -521,7 +528,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
             }
 
             AiAction.TYPE_WAIT -> {
-                val waitMs = if (action.duration > 0) action.duration.coerceAtMost(10000) else 3000L
+                val waitMs = if (action.duration > 0) action.duration.coerceAtMost(10000) else 1000L
                 addMessage("system", "Waiting ${waitMs}ms for UI update...")
                 scope.launch {
                     delay(waitMs)
@@ -555,10 +562,15 @@ object AgentController : ITgBridgeService, IAiConfigService {
             try {
                 when (action.type) {
                     AiAction.TYPE_CLICK -> {
-                        withContext(Dispatchers.Main) {
-                            AgentAccessibilityService.instance?.click(action.x, action.y)
+                        val svc = AgentAccessibilityService.instance
+                        if (svc == null) {
+                            outputMsg = "Accessibility service not running"
+                        } else {
+                            success = withContext(Dispatchers.Main) {
+                                svc.clickAndWaitForCompletion(action.x, action.y)
+                            }
+                            if (!success) outputMsg = "Click gesture was cancelled"
                         }
-                        success = true
                     }
 
                     AiAction.TYPE_SWIPE -> {
@@ -567,10 +579,10 @@ object AgentController : ITgBridgeService, IAiConfigService {
                             outputMsg = "Accessibility service not running"
                         } else {
                             val dur = if (action.duration > 0) action.duration else 300L
-                            withContext(Dispatchers.Main) {
-                                svc.swipe(action.x, action.y, action.endX, action.endY, dur)
+                            success = withContext(Dispatchers.Main) {
+                                svc.swipeAndWaitForCompletion(action.x, action.y, action.endX, action.endY, dur)
                             }
-                            success = true
+                            if (!success) outputMsg = "Swipe gesture was cancelled"
                         }
                     }
 
@@ -580,10 +592,10 @@ object AgentController : ITgBridgeService, IAiConfigService {
                             outputMsg = "Accessibility service not running"
                         } else {
                             val dur = if (action.duration > 0) action.duration else 1000L
-                            withContext(Dispatchers.Main) {
-                                svc.longPress(action.x, action.y, dur)
+                            success = withContext(Dispatchers.Main) {
+                                svc.longPressAndWaitForCompletion(action.x, action.y, dur)
                             }
-                            success = true
+                            if (!success) outputMsg = "Long press gesture was cancelled"
                         }
                     }
 
@@ -964,13 +976,65 @@ object AgentController : ITgBridgeService, IAiConfigService {
                     val msg = if (finalMsg != null) "Action success.\n$finalMsg" else "Action success. Waiting for UI refresh..."
                     addMessage("system", msg)
                 }
-                delay(2500)
+                waitAfterSuccessfulAction(action)
                 executeAgentStep(uiState.userInput)
             } else {
                 withContext(Dispatchers.Main) {
                     if (finalMsg != null) addMessage("system", finalMsg)
                     stopAgent()
                 }
+            }
+        }
+    }
+
+    private suspend fun waitAfterSuccessfulAction(action: AiAction) {
+        val svc = AgentAccessibilityService.instance
+        when (action.type) {
+            AiAction.TYPE_CLICK,
+            AiAction.TYPE_TEXT_INPUT,
+            AiAction.TYPE_GLOBAL_ACTION -> {
+                svc?.waitForUiStabilization(timeoutMs = 900, quietMs = 160, minWaitMs = 260) ?: delay(260)
+            }
+
+            AiAction.TYPE_SWIPE -> {
+                val gestureMs = if (action.duration > 0) action.duration else 300L
+                svc?.waitForUiStabilization(
+                    timeoutMs = (gestureMs + 700L).coerceAtMost(1600L),
+                    quietMs = 180,
+                    minWaitMs = 180
+                ) ?: delay(gestureMs + 150L)
+            }
+
+            AiAction.TYPE_LONG_PRESS -> {
+                val gestureMs = if (action.duration > 0) action.duration else 1000L
+                svc?.waitForUiStabilization(
+                    timeoutMs = (gestureMs + 700L).coerceAtMost(2200L),
+                    quietMs = 180,
+                    minWaitMs = 220
+                ) ?: delay(gestureMs + 150L)
+            }
+
+            AiAction.TYPE_INTENT -> {
+                svc?.waitForUiStabilization(timeoutMs = 1800, quietMs = 220, minWaitMs = 500) ?: delay(900)
+            }
+
+            AiAction.TYPE_SCREEN_RECORD,
+            AiAction.TYPE_CAMERA,
+            AiAction.TYPE_AUDIO_RECORD,
+            AiAction.TYPE_WAKE_SCREEN -> {
+                svc?.waitForUiStabilization(timeoutMs = 800, quietMs = 180, minWaitMs = 300) ?: delay(300)
+            }
+
+            AiAction.TYPE_SCREENSHOT,
+            AiAction.TYPE_DOWNLOAD,
+            AiAction.TYPE_HTTP_REQUEST,
+            AiAction.TYPE_DPM,
+            AiAction.TYPE_VOLUME -> {
+                delay(80)
+            }
+
+            else -> {
+                delay(250)
             }
         }
     }

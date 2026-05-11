@@ -64,24 +64,6 @@
                             android:textColor="@color/mdm_primary" />
 
                         <com.google.android.material.textfield.TextInputLayout
-                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="12dp"
-                            android:hint="Provider"
-                            app:boxStrokeColor="@color/mdm_primary"
-                            app:hintTextColor="@color/mdm_text_secondary">
-
-                            <AutoCompleteTextView
-                                android:id="@+id/spinnerProvider"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:inputType="none"
-                                android:textColor="@color/mdm_text_primary" />
-
-                        </com.google.android.material.textfield.TextInputLayout>
-
-                        <com.google.android.material.textfield.TextInputLayout
                             style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
@@ -133,23 +115,6 @@
                                 android:textColor="@color/mdm_text_primary" />
 
                         </com.google.android.material.textfield.TextInputLayout>
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnFetchModels"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="12dp"
-                            android:text="获取可用模型"
-                            app:strokeColor="@color/mdm_primary" />
-
-                        <TextView
-                            android:id="@+id/tvModelListResult"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:textAppearance="@style/TextAppearance.Mdm.Caption"
-                            android:visibility="gone" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnTestApi"

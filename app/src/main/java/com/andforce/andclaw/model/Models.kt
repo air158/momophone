@@ -151,14 +151,14 @@ data class AgentUiState(
     val isRunning: Boolean = false,
     val status: String = "waiting command...",
     val userInput: String = "",
-    val aiProvider: String = "Kimi Code"
+    val aiProvider: String = "momoai"
 )
 
 data class ApiConfig(
-    val provider: String = "Kimi Code",
+    val provider: String = "momoai",
     val apiKey: String = "",
-    val apiUrl: String = "https://api.kimi.com/coding",
-    val model: String = "kimi-k2.5"
+    val apiUrl: String = "https://momoai.pro/v1/chat/completions",
+    val model: String = "momo_237"
 )
 
 data class ChatMessage(
