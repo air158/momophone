@@ -244,7 +244,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 )
             }
             "/stop" -> {
-                withContext(Dispatchers.Main) { stopAgent() }
+                withContext(Dispatchers.Main) { stopAgent("用户请求停止") }
                 RemoteOutboundHelper.sendText(
                     remoteBridge, telegramSession, "✅ 已停止当前任务", replyToMessageId = msgId
                 )
@@ -281,7 +281,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 RemoteOutboundHelper.sendText(remoteBridge, clawSession, body, replyToMessageId = null)
             }
             "/stop" -> {
-                withContext(Dispatchers.Main) { stopAgent() }
+                withContext(Dispatchers.Main) { stopAgent("用户请求停止") }
                 RemoteOutboundHelper.sendText(
                     remoteBridge, clawSession, "✅ 已停止当前任务", replyToMessageId = null
                 )
@@ -319,7 +319,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 RemoteOutboundHelper.sendText(remoteBridge, feishuSession, body, replyToMessageId = null)
             }
             "/stop" -> {
-                withContext(Dispatchers.Main) { stopAgent() }
+                withContext(Dispatchers.Main) { stopAgent("用户请求停止") }
                 RemoteOutboundHelper.sendText(
                     remoteBridge, feishuSession, "✅ 已停止当前任务", replyToMessageId = null
                 )
@@ -360,12 +360,21 @@ object AgentController : ITgBridgeService, IAiConfigService {
         }
     }
 
-    fun stopAgent() {
+    fun stopAgent(reason: String? = null) {
+        val sessionToNotify = _activeRemoteSession
+        val wasRunning = isAgentRunning
         isAgentRunning = false
         uiState = uiState.copy(isRunning = false, status = "Agent Stopped.")
         agentJob?.cancel()
         _activeRemoteSession = null
         syncLegacyTgChatIdFromSession(null)
+
+        if (wasRunning && sessionToNotify != null) {
+            val suffix = reason?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
+            scope.launch(Dispatchers.IO) {
+                RemoteOutboundHelper.sendText(remoteBridge, sessionToNotify, "⏹ Agent 已停止$suffix")
+            }
+        }
     }
 
     private suspend fun executeAgentStep(userInput: String, screenshotBase64: String? = null) {
@@ -431,7 +440,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
             if (action.type == "error") {
                 addMessage("system", "Error occurred: ${action.reason}")
-                stopAgent()
+                stopAgent(action.reason ?: "AI 返回错误")
             } else {
                 withContext(Dispatchers.Main) {
                     val aiDisplayMessage = "[Progress: ${action.progress ?: "Executing"}]\n${action.reason ?: "Thinking..."}"
@@ -442,7 +451,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {
                 addMessage("system", "AI Request Failed: ${e.message}")
-                stopAgent()
+                stopAgent("AI 请求失败: ${e.message ?: "unknown"}")
             }
         }
     }
@@ -469,7 +478,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
             if (loopRetryCount >= 3) {
                 addMessage("system", "Loop detected. Same action [$fingerprint] repeated ${loopRetryCount * 5} times with screenshots. Agent stopped.")
-                stopAgent()
+                stopAgent("检测到重复操作，已触发循环保护")
                 return
             }
 
@@ -491,7 +500,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 } ?: false
                 if (isTerminal) {
                     addMessage("system", "Task dispatched via system.")
-                    stopAgent()
+                    stopAgent("任务已通过系统分发")
                 } else {
                     addMessage("system", "App opened. Waiting for UI to settle...")
                     isAgentRunning = true
@@ -521,7 +530,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 val dpmAction = action.dpmAction
                 if (dpmAction.isNullOrEmpty()) {
                     addMessage("system", "DPM action name missing")
-                    stopAgent()
+                    stopAgent("DPM action name missing")
                     return
                 }
                 performConfirmedAction(action)
@@ -540,17 +549,17 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
             AiAction.TYPE_FINISH -> {
                 addMessage("system", "Finished.")
-                stopAgent()
+                stopAgent(action.reason ?: "任务完成")
             }
 
             AiAction.TYPE_ERROR -> {
                 addMessage("system", "AI Error: ${action.reason}")
-                stopAgent()
+                stopAgent(action.reason ?: "AI 返回错误")
             }
 
             else -> {
                 addMessage("system", "Unknown action: ${action.type}")
-                stopAgent()
+                stopAgent("Unknown action: ${action.type}")
             }
         }
     }
@@ -1006,7 +1015,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
             } else {
                 withContext(Dispatchers.Main) {
                     if (finalMsg != null) addMessage("system", finalMsg)
-                    stopAgent()
+                    stopAgent(finalMsg ?: "动作执行失败")
                 }
             }
         }
@@ -1128,10 +1137,11 @@ object AgentController : ITgBridgeService, IAiConfigService {
             }
         }
 
-        if (RemoteOutboundHelper.shouldAttemptRemoteEcho(role, activeRemoteSession)) {
+        val sessionToEcho = activeRemoteSession
+        if (RemoteOutboundHelper.shouldAttemptRemoteEcho(role, sessionToEcho)) {
             scope.launch(Dispatchers.IO) {
                 RemoteOutboundHelper.sendText(
-                    remoteBridge, activeRemoteSession, "[$role] $content"
+                    remoteBridge, sessionToEcho, "[$role] $content"
                 )
             }
         }
