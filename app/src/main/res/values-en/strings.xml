@@ -6,6 +6,11 @@
     <string name="send_task">Send</string>
     <string name="execute_now">Execute Now</string>
     <string name="clear_all">Clear All</string>
+    <string name="plans">Plans</string>
+    <string name="no_plans">No plans yet</string>
+    <string name="plan_detail">Plan Detail</string>
+    <string name="resume_plan">Resume</string>
+    <string name="plan_resume_unavailable">This plan is already finished and cannot be resumed.</string>
     <string name="select_all">Select All</string>
     <string name="delete_selected">Delete Selected</string>
     <string name="confirm_clear_all">Are you sure you want to clear all conversation records?</string>

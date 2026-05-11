@@ -101,3 +101,12 @@ data class StepVerification(
     @SerializedName("task_complete")
     val taskComplete: Boolean = false
 )
+
+data class PlanListItem(
+    val id: String,
+    val goal: String,
+    val summary: String,
+    val status: PlanStatus,
+    val updatedAt: Long,
+    val currentStepId: String?
+)

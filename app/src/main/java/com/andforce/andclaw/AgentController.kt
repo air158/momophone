@@ -20,6 +20,7 @@ import com.afwsamples.testdpc.common.Util
 import com.andforce.andclaw.db.ChatMessageDao
 import com.andforce.andclaw.db.ChatMessageEntity
 import com.andforce.andclaw.plan.AgentPlan
+import com.andforce.andclaw.plan.PlanListItem
 import com.andforce.andclaw.plan.PlanManager
 import com.google.gson.Gson
 import com.andforce.andclaw.bridge.RemoteOutboundHelper
@@ -82,6 +83,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private var consecutiveSameCount = 0
     private var lastFingerprint = ""
     private var loopRetryCount = 0
+    private var ordinaryFailureReplanCount = 0
     private var uiState = AgentUiState()
     private var activePlan: AgentPlan? = null
 
@@ -127,6 +129,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         migrateOldProviderKeys()
         restoreConfig()
         loadHistory()
+        loadLatestUnfinishedPlan()
     }
 
     private fun loadHistory() {
@@ -139,6 +142,13 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 ChatMessage(role = e.role, content = e.content, action = action, timestamp = e.timestamp, id = e.id)
             }
             _messages.value = msgs
+        }
+    }
+
+    private fun loadLatestUnfinishedPlan() {
+        activePlan = planManager.loadLatestUnfinishedPlan()
+        activePlan?.let { plan ->
+            addMessage("system", "Restored unfinished plan: ${plan.summary} (${plan.status}). Open Plans to resume.")
         }
     }
 
@@ -357,6 +367,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         consecutiveSameCount = 0
         lastFingerprint = ""
         loopRetryCount = 0
+        ordinaryFailureReplanCount = 0
         activePlan = planManager.createPlan(input)
         activePlan?.let { plan ->
             addMessage("system", "Long-term plan created: ${planManager.planDir(plan).absolutePath}/plan.md")
@@ -367,6 +378,36 @@ object AgentController : ITgBridgeService, IAiConfigService {
         agentJob = scope.launch {
             generateInitialPlan(input)
             executeAgentStep(input)
+        }
+    }
+
+    fun listPlans(): List<PlanListItem> = planManager.listPlans()
+
+    fun getPlanMarkdown(planId: String): String =
+        planManager.readPlanMarkdown(planId) ?: "Plan not found: $planId"
+
+    fun resumePlan(planId: String) {
+        if (isAgentRunning) {
+            addMessage("system", "Agent is already running. Stop it before resuming another plan.")
+            return
+        }
+        val plan = planManager.loadPlan(planId)
+        if (plan == null) {
+            addMessage("system", "Plan not found: $planId")
+            return
+        }
+        activePlan = plan
+        _activeRemoteSession = null
+        syncLegacyTgChatIdFromSession(null)
+        isAgentRunning = true
+        uiState = uiState.copy(isRunning = true, userInput = plan.goal)
+        consecutiveSameCount = 0
+        lastFingerprint = ""
+        loopRetryCount = 0
+        ordinaryFailureReplanCount = 0
+        addMessage("system", "Resuming plan: ${plan.summary}")
+        agentJob = scope.launch {
+            executeAgentStep(plan.goal)
         }
     }
 
@@ -1072,10 +1113,27 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 withContext(Dispatchers.Main) {
                     activePlan = planManager.recordFailure(activePlan, finalMsg ?: "Action failed", terminal = true)
                     if (finalMsg != null) addMessage("system", finalMsg)
-                    stopAgent(finalMsg ?: "动作执行失败")
                 }
+                handleOrdinaryActionFailure(finalMsg ?: "动作执行失败")
             }
         }
+    }
+
+    private suspend fun handleOrdinaryActionFailure(reason: String) {
+        if (!isAgentRunning) return
+        if (ordinaryFailureReplanCount >= 2) {
+            withContext(Dispatchers.Main) {
+                stopAgent(reason)
+            }
+            return
+        }
+        ordinaryFailureReplanCount++
+        withContext(Dispatchers.Main) {
+            addMessage("system", "Action failed. Replanning before retry... ($ordinaryFailureReplanCount/2)")
+        }
+        replanActivePlan("Ordinary action failure: $reason")
+        if (!isAgentRunning) return
+        executeAgentStep(uiState.userInput)
     }
 
     private suspend fun continueAfterSuccessfulAction(action: AiAction, actionResult: String? = null) {

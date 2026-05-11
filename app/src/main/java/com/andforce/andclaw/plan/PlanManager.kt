@@ -61,6 +61,40 @@ class PlanManager(context: Context) {
         return plan
     }
 
+    fun listPlans(): List<PlanListItem> {
+        if (!rootDir.exists()) return emptyList()
+        return rootDir.listFiles()
+            ?.mapNotNull { dir -> loadPlan(dir.name) }
+            ?.sortedByDescending { it.updatedAt }
+            ?.map { plan ->
+                PlanListItem(
+                    id = plan.id,
+                    goal = plan.goal,
+                    summary = plan.summary,
+                    status = plan.status,
+                    updatedAt = plan.updatedAt,
+                    currentStepId = plan.currentStepId
+                )
+            }
+            ?: emptyList()
+    }
+
+    fun loadLatestUnfinishedPlan(): AgentPlan? =
+        listPlans()
+            .firstOrNull { it.status in setOf(PlanStatus.RUNNING, PlanStatus.PLANNING, PlanStatus.PAUSED, PlanStatus.BLOCKED) }
+            ?.let { loadPlan(it.id) }
+
+    fun loadPlan(planId: String): AgentPlan? {
+        val file = File(File(rootDir, planId), "plan.json")
+        if (!file.exists()) return null
+        return runCatching { gson.fromJson(file.readText(), AgentPlan::class.java) }.getOrNull()
+    }
+
+    fun readPlanMarkdown(planId: String): String? {
+        val file = File(File(rootDir, planId), "plan.md")
+        return if (file.exists()) runCatching { file.readText() }.getOrNull() else null
+    }
+
     fun parseDraft(rawResponse: String): PlanDraft? =
         runCatching { gson.fromJson(extractJsonObject(rawResponse), PlanDraft::class.java) }.getOrNull()
 

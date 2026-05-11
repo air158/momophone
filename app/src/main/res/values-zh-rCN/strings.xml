@@ -6,6 +6,11 @@
     <string name="send_task">发送</string>
     <string name="execute_now">立即执行</string>
     <string name="clear_all">清空所有</string>
+    <string name="plans">计划</string>
+    <string name="no_plans">暂无计划</string>
+    <string name="plan_detail">计划详情</string>
+    <string name="resume_plan">继续执行</string>
+    <string name="plan_resume_unavailable">该计划已结束，不能继续执行。</string>
     <string name="select_all">全选</string>
     <string name="delete_selected">删除选中</string>
     <string name="confirm_clear_all">确定要清空所有对话记录吗？</string>
