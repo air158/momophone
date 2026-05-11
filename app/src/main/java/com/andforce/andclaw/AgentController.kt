@@ -1067,7 +1067,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                     addMessage("system", msg)
                     addMessage("system", "Waiting for UI to settle...")
                 }
-                continueAfterSuccessfulAction(action)
+                continueAfterSuccessfulAction(action, finalMsg)
             } else {
                 withContext(Dispatchers.Main) {
                     activePlan = planManager.recordFailure(activePlan, finalMsg ?: "Action failed", terminal = true)
@@ -1078,13 +1078,41 @@ object AgentController : ITgBridgeService, IAiConfigService {
         }
     }
 
-    private suspend fun continueAfterSuccessfulAction(action: AiAction) {
+    private suspend fun continueAfterSuccessfulAction(action: AiAction, actionResult: String? = null) {
         waitAfterSuccessfulAction(action)
+        if (!isAgentRunning) return
+        verifyCurrentPlanStep(actionResult)
         if (!isAgentRunning) return
         withContext(Dispatchers.Main) {
             addMessage("system", "UI settled. Analyzing next step...")
         }
         executeAgentStep(uiState.userInput)
+    }
+
+    private suspend fun verifyCurrentPlanStep(actionResult: String?) {
+        val planContext = planManager.toPromptContext(activePlan) ?: return
+        val screenData = AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        val response = Utils.callStepVerifier(
+            userGoal = uiState.userInput,
+            screenData = screenData,
+            planContext = planContext,
+            actionResult = actionResult ?: "Action success.",
+            config = config,
+            context = appContext
+        )
+        val verification = planManager.parseVerification(response)
+        if (verification != null) {
+            activePlan = planManager.applyVerification(activePlan, verification)
+            val evidence = verification.evidence?.takeIf { it.isNotBlank() } ?: "step status updated"
+            addMessage("system", "Plan verifier: $evidence")
+            if (verification.taskComplete) {
+                stopAgent(verification.evidence ?: "任务完成")
+                return
+            }
+            verification.blocker?.takeIf { it.isNotBlank() }?.let { blocker ->
+                replanActivePlan("Verifier found blocker: $blocker")
+            }
+        }
     }
 
     private suspend fun waitAfterSuccessfulAction(action: AiAction) {

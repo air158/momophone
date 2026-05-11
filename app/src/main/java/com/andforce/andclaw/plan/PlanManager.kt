@@ -67,6 +67,9 @@ class PlanManager(context: Context) {
     fun parsePatch(rawResponse: String): PlanPatch? =
         runCatching { gson.fromJson(extractJsonObject(rawResponse), PlanPatch::class.java) }.getOrNull()
 
+    fun parseVerification(rawResponse: String): StepVerification? =
+        runCatching { gson.fromJson(extractJsonObject(rawResponse), StepVerification::class.java) }.getOrNull()
+
     fun replaceWithDraft(plan: AgentPlan?, draft: PlanDraft?): AgentPlan? {
         if (plan == null || draft == null || draft.steps.isEmpty()) return plan
         val draftedSteps = draft.steps.mapIndexedNotNull { index, step -> step.toPlanStep(index) }
@@ -167,6 +170,54 @@ class PlanManager(context: Context) {
         return plan.copy(
             updatedAt = System.currentTimeMillis(),
             memory = plan.memory.copy(observations = appendLimited(plan.memory.observations, message))
+        ).also(::save)
+    }
+
+    fun applyVerification(plan: AgentPlan?, verification: StepVerification?): AgentPlan? {
+        if (plan == null || verification == null) return plan
+        if (verification.taskComplete) {
+            return markDone(plan, verification.evidence ?: "Verifier marked task complete")
+        }
+
+        val verifiedStepId = verification.currentStepId ?: plan.currentStepId
+        val nextStepId = verification.nextStepId?.takeIf { id -> plan.steps.any { it.id == id } }
+        var steps = plan.steps.map { step ->
+            if (step.id != verifiedStepId) {
+                step
+            } else {
+                step.copy(
+                    status = verification.currentStepStatus?.toStepStatus() ?: step.status,
+                    evidence = verification.evidence?.let { appendLimited(step.evidence, it) } ?: step.evidence,
+                    lastError = verification.blocker ?: step.lastError
+                )
+            }
+        }
+        val currentStepId = when {
+            nextStepId != null -> nextStepId
+            verification.currentStepStatus?.toStepStatus() == StepStatus.DONE -> {
+                steps.firstOrNull { it.status == StepStatus.IN_PROGRESS || it.status == StepStatus.TODO }?.id
+            }
+            else -> verifiedStepId
+        }
+        steps = steps.map { step ->
+            if (step.id == currentStepId && step.status == StepStatus.TODO) {
+                step.copy(status = StepStatus.IN_PROGRESS)
+            } else {
+                step
+            }
+        }
+        val blocker = verification.blocker?.takeIf { it.isNotBlank() }
+        return plan.copy(
+            status = if (blocker != null) PlanStatus.BLOCKED else PlanStatus.RUNNING,
+            updatedAt = System.currentTimeMillis(),
+            steps = steps,
+            currentStepId = currentStepId,
+            memory = plan.memory.copy(
+                observations = verification.evidence?.takeIf { it.isNotBlank() }?.let {
+                    appendLimited(plan.memory.observations, "Verifier: $it")
+                } ?: plan.memory.observations,
+                blockers = blocker?.let { appendLimited(plan.memory.blockers, it) } ?: plan.memory.blockers
+            )
         ).also(::save)
     }
 

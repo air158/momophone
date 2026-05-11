@@ -429,6 +429,44 @@ Rules:
 - Do not invent credentials, payment authorization, or unsafe permissions.
 """.trimIndent()
 
+    private fun buildStepVerifierPrompt(
+        userGoal: String,
+        planContext: String,
+        screenData: String,
+        actionResult: String
+    ): String = """
+User goal:
+$userGoal
+
+Existing plan:
+$planContext
+
+Latest action result:
+$actionResult
+
+Current screen state after the action settled:
+$screenData
+
+Verify whether the current plan step is complete and decide the next plan step.
+
+Output schema:
+{
+  "current_step_id": "current step id",
+  "current_step_status": "TODO|IN_PROGRESS|DONE|BLOCKED|FAILED|SKIPPED",
+  "next_step_id": "step id to continue from, or null",
+  "evidence": "short observation that supports this decision",
+  "blocker": "blocking reason, or null",
+  "task_complete": false
+}
+
+Rules:
+- Mark a step DONE only when the screen/action result gives concrete evidence.
+- If the user goal is fully achieved, set task_complete=true.
+- If blocked by login, missing permission, payment, captcha, unavailable credentials, or unsafe source, set current_step_status=BLOCKED and provide blocker.
+- If uncertain, keep current_step_status=IN_PROGRESS and keep or choose the most relevant next_step_id.
+- Do not invent screen state that is not present.
+""".trimIndent()
+
     suspend fun callInitialPlanner(
         userGoal: String,
         screenData: String,
@@ -455,6 +493,21 @@ Rules:
         config = config,
         context = context,
         logLabel = "planPatchPlanner"
+    )
+
+    suspend fun callStepVerifier(
+        userGoal: String,
+        screenData: String,
+        planContext: String,
+        actionResult: String,
+        config: ApiConfig,
+        context: Context
+    ): String = callJsonOnlyLLM(
+        systemPrompt = buildPlannerSystemPrompt(),
+        userPrompt = buildStepVerifierPrompt(userGoal, planContext, screenData, actionResult),
+        config = config,
+        context = context,
+        logLabel = "stepVerifier"
     )
 
     suspend fun callLLM(prompt: String, config: ApiConfig): String =

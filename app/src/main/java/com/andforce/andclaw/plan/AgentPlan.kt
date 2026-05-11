@@ -88,3 +88,16 @@ data class PlanPatchUpdate(
     @SerializedName("current_step_id")
     val currentStepId: String? = null
 )
+
+data class StepVerification(
+    @SerializedName("current_step_id")
+    val currentStepId: String? = null,
+    @SerializedName("current_step_status")
+    val currentStepStatus: String? = null,
+    @SerializedName("next_step_id")
+    val nextStepId: String? = null,
+    val evidence: String? = null,
+    val blocker: String? = null,
+    @SerializedName("task_complete")
+    val taskComplete: Boolean = false
+)
