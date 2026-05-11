@@ -29,23 +29,145 @@ class AgentAccessibilityService : AccessibilityService() {
     @Volatile
     private var lastUiEventAt: Long = 0L
 
+    @Volatile
+    private var lastNodeSnapshots: Map<Int, UiNodeSnapshot> = emptyMap()
+
+    private data class UiNodeSnapshot(
+        val id: Int,
+        val label: String,
+        val bounds: Rect,
+        val clickBounds: Rect,
+        val className: String,
+        val viewId: String?,
+        val clickable: Boolean,
+        val editable: Boolean,
+        val enabled: Boolean,
+        val focused: Boolean
+    )
+
     override fun onServiceConnected() { instance = this }
 
     fun captureScreenHierarchy(): String {
         val root = rootInActiveWindow ?: return "Empty Screen"
         val sb = StringBuilder()
-        parseNode(root, sb)
+        val snapshots = mutableListOf<UiNodeSnapshot>()
+        parseNode(root, sb, snapshots, nextId = intArrayOf(1), clickableAncestorBounds = null)
+        lastNodeSnapshots = snapshots.associateBy { it.id }
         return sb.toString()
     }
 
-    private fun parseNode(node: AccessibilityNodeInfo?, sb: StringBuilder) {
+    private fun parseNode(
+        node: AccessibilityNodeInfo?,
+        sb: StringBuilder,
+        snapshots: MutableList<UiNodeSnapshot>,
+        nextId: IntArray,
+        clickableAncestorBounds: Rect?
+    ) {
         node ?: return
-        if (node.isClickable || !node.text.isNullOrEmpty()) {
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        val text = node.text?.toString().orEmpty()
+        val description = node.contentDescription?.toString().orEmpty()
+        val label = listOf(text, description).filter { it.isNotBlank() }.distinct().joinToString(" | ")
+        val isRelevant = node.isClickable || node.isEditable || label.isNotBlank()
+        val ownClickableBounds = if (node.isClickable && !rect.isEmpty) Rect(rect) else null
+        val clickBounds = ownClickableBounds ?: clickableAncestorBounds ?: Rect(rect)
+
+        if (isRelevant && !rect.isEmpty) {
+            val id = nextId[0]++
+            val className = node.className?.toString().orEmpty()
+            val snapshot = UiNodeSnapshot(
+                id = id,
+                label = label,
+                bounds = Rect(rect),
+                clickBounds = Rect(clickBounds),
+                className = className,
+                viewId = node.viewIdResourceName,
+                clickable = node.isClickable || clickableAncestorBounds != null,
+                editable = node.isEditable,
+                enabled = node.isEnabled,
+                focused = node.isFocused
+            )
+            snapshots.add(snapshot)
+            val centerX = clickBounds.centerX()
+            val centerY = clickBounds.centerY()
+            sb.append(
+                "{id:$id, role:'${escapeUiValue(className.substringAfterLast('.'))}', " +
+                    "label:'${escapeUiValue(label.ifBlank { "(no label)" })}', " +
+                    "view_id:'${escapeUiValue(node.viewIdResourceName.orEmpty())}', " +
+                    "clickable:${snapshot.clickable}, editable:${node.isEditable}, enabled:${node.isEnabled}, focused:${node.isFocused}, " +
+                    "bounds:[${rect.left},${rect.top},${rect.right},${rect.bottom}], " +
+                    "click_bounds:[${clickBounds.left},${clickBounds.top},${clickBounds.right},${clickBounds.bottom}], " +
+                    "center:[$centerX,$centerY]}\n"
+            )
+        }
+        val nextClickableAncestor = ownClickableBounds ?: clickableAncestorBounds
+        for (i in 0 until node.childCount) {
+            parseNode(node.getChild(i), sb, snapshots, nextId, nextClickableAncestor)
+        }
+    }
+
+    private fun escapeUiValue(value: String): String =
+        value.replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace("\n", " ")
+            .replace("\r", " ")
+
+    suspend fun clickNodeAndWaitForCompletion(nodeId: Int): Boolean {
+        val snapshot = lastNodeSnapshots[nodeId] ?: return false
+        return clickAndWaitForCompletion(snapshot.clickBounds.centerX(), snapshot.clickBounds.centerY())
+    }
+
+    fun describeNodeAt(x: Int, y: Int): String? {
+        val root = rootInActiveWindow ?: return null
+        return findDeepestNodeAt(root, x, y)?.let { node ->
             val rect = Rect()
             node.getBoundsInScreen(rect)
-            sb.append("{text:'${node.text}', bounds:[${rect.left},${rect.top},${rect.right},${rect.bottom}]}\n")
+            val text = node.text?.toString().orEmpty()
+            val description = node.contentDescription?.toString().orEmpty()
+            val label = listOf(text, description).filter { it.isNotBlank() }.distinct().joinToString(" | ")
+            val className = node.className?.toString().orEmpty().substringAfterLast('.')
+            "label='${escapeUiValue(label)}', role='${escapeUiValue(className)}', bounds=[${rect.left},${rect.top},${rect.right},${rect.bottom}]"
         }
-        for (i in 0 until node.childCount) parseNode(node.getChild(i), sb)
+    }
+
+    fun doesNodeAtMatchTarget(x: Int, y: Int, targetText: String): Boolean {
+        val root = rootInActiveWindow ?: return true
+        val node = findDeepestNodeAt(root, x, y) ?: return true
+        val target = targetText.trim()
+        if (target.isEmpty()) return true
+        val labels = collectNodeAndAncestorLabels(node)
+        return labels.any { label ->
+            label.contains(target, ignoreCase = true) || target.contains(label, ignoreCase = true)
+        }
+    }
+
+    private fun findDeepestNodeAt(node: AccessibilityNodeInfo, x: Int, y: Int): AccessibilityNodeInfo? {
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        if (!rect.contains(x, y)) return null
+        for (i in node.childCount - 1 downTo 0) {
+            val child = node.getChild(i) ?: continue
+            val match = findDeepestNodeAt(child, x, y)
+            if (match != null) return match
+        }
+        return node
+    }
+
+    private fun collectNodeAndAncestorLabels(node: AccessibilityNodeInfo): List<String> {
+        val labels = mutableListOf<String>()
+        var current: AccessibilityNodeInfo? = node
+        var depth = 0
+        while (current != null && depth < 8) {
+            val text = current.text?.toString().orEmpty()
+            val description = current.contentDescription?.toString().orEmpty()
+            listOf(text, description)
+                .filter { it.isNotBlank() }
+                .forEach { labels.add(it) }
+            current = current.parent
+            depth++
+        }
+        return labels.distinct()
     }
 
     fun click(x: Int, y: Int) {

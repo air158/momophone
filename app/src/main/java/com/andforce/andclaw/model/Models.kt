@@ -50,6 +50,20 @@ data class AiAction(
     val y: Int = 0,
 
     /**
+     * Preferred click target from the latest accessibility snapshot.
+     * This avoids ambiguous coordinate-only taps when multiple nearby elements
+     * have similar positions, such as search suggestions and submit buttons.
+     */
+    @SerializedName("node_id")
+    val nodeId: Int? = null,
+
+    /**
+     * Optional expected label/description for click validation.
+     */
+    @SerializedName("target_text")
+    val targetText: String? = null,
+
+    /**
      * 可选：目标应用的包名（用于显式启动）
      */
     @SerializedName("package_name")

@@ -452,6 +452,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
         val fingerprint = when (action.type) {
             AiAction.TYPE_HTTP_REQUEST -> "${action.type}_${action.data}_${action.httpMethod}"
+            AiAction.TYPE_CLICK -> "${action.type}_${action.nodeId ?: "xy"}_${action.x}_${action.y}_${action.targetText.orEmpty()}"
             else -> "${action.type}_${action.x}_${action.y}"
         }
         if (fingerprint == lastFingerprint) {
@@ -566,10 +567,33 @@ object AgentController : ITgBridgeService, IAiConfigService {
                         if (svc == null) {
                             outputMsg = "Accessibility service not running"
                         } else {
-                            success = withContext(Dispatchers.Main) {
-                                svc.clickAndWaitForCompletion(action.x, action.y)
+                            val targetText = action.targetText?.trim().orEmpty()
+                            if (action.nodeId != null) {
+                                success = withContext(Dispatchers.Main) {
+                                    svc.clickNodeAndWaitForCompletion(action.nodeId)
+                                }
+                                if (!success) outputMsg = "Click target node_id=${action.nodeId} was not found in the latest UI snapshot"
+                            } else if (targetText.isNotEmpty()) {
+                                val matchesTarget = withContext(Dispatchers.Main) {
+                                    svc.doesNodeAtMatchTarget(action.x, action.y, targetText)
+                                }
+                                if (!matchesTarget) {
+                                    val actual = withContext(Dispatchers.Main) {
+                                        svc.describeNodeAt(action.x, action.y)
+                                    } ?: "unknown element"
+                                    outputMsg = "Click blocked: target_text '$targetText' did not match element at (${action.x},${action.y}): $actual"
+                                } else {
+                                    success = withContext(Dispatchers.Main) {
+                                        svc.clickAndWaitForCompletion(action.x, action.y)
+                                    }
+                                    if (!success) outputMsg = "Click gesture was cancelled"
+                                }
+                            } else {
+                                success = withContext(Dispatchers.Main) {
+                                    svc.clickAndWaitForCompletion(action.x, action.y)
+                                }
+                                if (!success) outputMsg = "Click gesture was cancelled"
                             }
-                            if (!success) outputMsg = "Click gesture was cancelled"
                         }
                     }
 
