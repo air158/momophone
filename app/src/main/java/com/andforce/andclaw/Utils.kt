@@ -197,6 +197,7 @@ Launch by package only: action:"android.intent.action.MAIN", package_name:"com.e
 === CLICK ===
 Tap a specific UI element from the current UI tree.
 - Prefer node_id: {"type":"click","node_id":12,"target_text":"Search"}
+- node_id clicks are executed through Android Accessibility ACTION_CLICK on the node or its clickable parent, not by tapping coordinates.
 - If node_id is unavailable, use x/y at the CENTER of the target and include "target_text" for safety validation.
 - The UI tree includes label, role, package, window_type, clickable/editable flags, bounds, click_bounds, and center.
 - For text rows inside a clickable parent, click_bounds/center is the actionable parent area.

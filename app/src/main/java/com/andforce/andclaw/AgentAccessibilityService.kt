@@ -42,6 +42,9 @@ class AgentAccessibilityService : AccessibilityService() {
         val viewId: String?,
         val packageName: String?,
         val windowType: Int,
+        val windowIndex: Int,
+        val nodePath: List<Int>,
+        val clickNodePath: List<Int>,
         val clickable: Boolean,
         val editable: Boolean,
         val enabled: Boolean,
@@ -54,23 +57,37 @@ class AgentAccessibilityService : AccessibilityService() {
         val sb = StringBuilder()
         val snapshots = mutableListOf<UiNodeSnapshot>()
         val nextId = intArrayOf(1)
-        val interactiveWindows = windows.orEmpty()
-            .filter { it.root != null }
-            .sortedWith(
-                compareBy<AccessibilityWindowInfo> { windowPromptRank(it.type) }
-                    .thenByDescending { it.isActive }
-                    .thenByDescending { it.isFocused }
-            )
+        val interactiveWindows = sortedInteractiveWindows()
 
         if (interactiveWindows.isNotEmpty()) {
-            interactiveWindows.forEach { window ->
-                val root = window.root ?: return@forEach
+            interactiveWindows.forEachIndexed { windowIndex, window ->
+                val root = window.root ?: return@forEachIndexed
                 sb.append("Window{type:${windowTypeName(window.type)}, active:${window.isActive}, focused:${window.isFocused}}\n")
-                parseNode(root, sb, snapshots, nextId, clickableAncestorBounds = null, windowType = window.type)
+                parseNode(
+                    root,
+                    sb,
+                    snapshots,
+                    nextId,
+                    clickableAncestorBounds = null,
+                    clickableAncestorPath = null,
+                    windowType = window.type,
+                    windowIndex = windowIndex,
+                    nodePath = emptyList()
+                )
             }
         } else {
             val root = rootInActiveWindow ?: return "Empty Screen"
-            parseNode(root, sb, snapshots, nextId, clickableAncestorBounds = null, windowType = 0)
+            parseNode(
+                root,
+                sb,
+                snapshots,
+                nextId,
+                clickableAncestorBounds = null,
+                clickableAncestorPath = null,
+                windowType = 0,
+                windowIndex = 0,
+                nodePath = emptyList()
+            )
         }
         lastNodeSnapshots = snapshots.associateBy { it.id }
         return sb.toString()
@@ -82,7 +99,10 @@ class AgentAccessibilityService : AccessibilityService() {
         snapshots: MutableList<UiNodeSnapshot>,
         nextId: IntArray,
         clickableAncestorBounds: Rect?,
-        windowType: Int
+        clickableAncestorPath: List<Int>?,
+        windowType: Int,
+        windowIndex: Int,
+        nodePath: List<Int>
     ) {
         node ?: return
         val rect = Rect()
@@ -92,7 +112,9 @@ class AgentAccessibilityService : AccessibilityService() {
         val label = listOf(text, description).filter { it.isNotBlank() }.distinct().joinToString(" | ")
         val isRelevant = node.isClickable || node.isEditable || label.isNotBlank()
         val ownClickableBounds = if (node.isClickable && !rect.isEmpty) Rect(rect) else null
+        val ownClickablePath = if (node.isClickable && !rect.isEmpty) nodePath else null
         val clickBounds = ownClickableBounds ?: clickableAncestorBounds ?: Rect(rect)
+        val clickNodePath = ownClickablePath ?: clickableAncestorPath ?: nodePath
 
         if (isRelevant && !rect.isEmpty) {
             val id = nextId[0]++
@@ -106,6 +128,9 @@ class AgentAccessibilityService : AccessibilityService() {
                 viewId = node.viewIdResourceName,
                 packageName = node.packageName?.toString(),
                 windowType = windowType,
+                windowIndex = windowIndex,
+                nodePath = nodePath,
+                clickNodePath = clickNodePath,
                 clickable = node.isClickable || clickableAncestorBounds != null,
                 editable = node.isEditable,
                 enabled = node.isEnabled,
@@ -127,10 +152,30 @@ class AgentAccessibilityService : AccessibilityService() {
             )
         }
         val nextClickableAncestor = ownClickableBounds ?: clickableAncestorBounds
+        val nextClickableAncestorPath = ownClickablePath ?: clickableAncestorPath
         for (i in 0 until node.childCount) {
-            parseNode(node.getChild(i), sb, snapshots, nextId, nextClickableAncestor, windowType)
+            parseNode(
+                node.getChild(i),
+                sb,
+                snapshots,
+                nextId,
+                nextClickableAncestor,
+                nextClickableAncestorPath,
+                windowType,
+                windowIndex,
+                nodePath + i
+            )
         }
     }
+
+    private fun sortedInteractiveWindows(): List<AccessibilityWindowInfo> =
+        windows.orEmpty()
+            .filter { it.root != null }
+            .sortedWith(
+                compareBy<AccessibilityWindowInfo> { windowPromptRank(it.type) }
+                    .thenByDescending { it.isActive }
+                    .thenByDescending { it.isFocused }
+            )
 
     private fun windowTypeName(type: Int): String = when (type) {
         AccessibilityWindowInfo.TYPE_APPLICATION -> "APPLICATION"
@@ -156,7 +201,24 @@ class AgentAccessibilityService : AccessibilityService() {
 
     suspend fun clickNodeAndWaitForCompletion(nodeId: Int): Boolean {
         val snapshot = lastNodeSnapshots[nodeId] ?: return false
-        return clickAndWaitForCompletion(snapshot.clickBounds.centerX(), snapshot.clickBounds.centerY())
+        val node = resolveNode(snapshot.windowIndex, snapshot.clickNodePath)
+            ?: resolveNode(snapshot.windowIndex, snapshot.nodePath)
+            ?: return false
+
+        val clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        if (clicked) waitForUiStabilization(timeoutMs = 900, quietMs = 160, minWaitMs = 260)
+        return clicked
+    }
+
+    private fun resolveNode(windowIndex: Int, path: List<Int>): AccessibilityNodeInfo? {
+        val root = sortedInteractiveWindows().getOrNull(windowIndex)?.root
+            ?: (if (windowIndex == 0) rootInActiveWindow else null)
+            ?: return null
+        var current: AccessibilityNodeInfo = root
+        for (childIndex in path) {
+            current = current.getChild(childIndex) ?: return null
+        }
+        return current
     }
 
     fun blockedInputMethodClickReason(nodeId: Int?, x: Int, y: Int, targetText: String?): String? {
