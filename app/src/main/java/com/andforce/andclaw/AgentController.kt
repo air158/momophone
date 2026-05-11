@@ -493,11 +493,10 @@ object AgentController : ITgBridgeService, IAiConfigService {
                     addMessage("system", "Task dispatched via system.")
                     stopAgent()
                 } else {
-                    addMessage("system", "App opened, checking next step...")
+                    addMessage("system", "App opened. Waiting for UI to settle...")
                     isAgentRunning = true
                     scope.launch {
-                        waitAfterSuccessfulAction(action)
-                        executeAgentStep(uiState.userInput)
+                        continueAfterSuccessfulAction(action)
                     }
                 }
             }
@@ -533,6 +532,8 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 addMessage("system", "Waiting ${waitMs}ms for UI update...")
                 scope.launch {
                     delay(waitMs)
+                    if (!isAgentRunning) return@launch
+                    addMessage("system", "Wait finished. Analyzing next step...")
                     executeAgentStep(uiState.userInput)
                 }
             }
@@ -997,11 +998,11 @@ object AgentController : ITgBridgeService, IAiConfigService {
             val finalMsg = outputMsg
             if (success && isAgentRunning) {
                 withContext(Dispatchers.Main) {
-                    val msg = if (finalMsg != null) "Action success.\n$finalMsg" else "Action success. Waiting for UI refresh..."
+                    val msg = if (finalMsg != null) "Action success.\n$finalMsg" else "Action success."
                     addMessage("system", msg)
+                    addMessage("system", "Waiting for UI to settle...")
                 }
-                waitAfterSuccessfulAction(action)
-                executeAgentStep(uiState.userInput)
+                continueAfterSuccessfulAction(action)
             } else {
                 withContext(Dispatchers.Main) {
                     if (finalMsg != null) addMessage("system", finalMsg)
@@ -1009,6 +1010,15 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 }
             }
         }
+    }
+
+    private suspend fun continueAfterSuccessfulAction(action: AiAction) {
+        waitAfterSuccessfulAction(action)
+        if (!isAgentRunning) return
+        withContext(Dispatchers.Main) {
+            addMessage("system", "UI settled. Analyzing next step...")
+        }
+        executeAgentStep(uiState.userInput)
     }
 
     private suspend fun waitAfterSuccessfulAction(action: AiAction) {
