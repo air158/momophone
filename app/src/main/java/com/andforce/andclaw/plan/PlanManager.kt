@@ -212,40 +212,15 @@ class PlanManager(context: Context) {
         if (verification.taskComplete) {
             return markDone(plan, verification.evidence ?: "Verifier marked task complete")
         }
-
-        val verifiedStepId = verification.currentStepId ?: plan.currentStepId
-        val nextStepId = verification.nextStepId?.takeIf { id -> plan.steps.any { it.id == id } }
-        var steps = plan.steps.map { step ->
-            if (step.id != verifiedStepId) {
-                step
-            } else {
-                step.copy(
-                    status = verification.currentStepStatus?.toStepStatus() ?: step.status,
-                    evidence = verification.evidence?.let { appendLimited(step.evidence, it) } ?: step.evidence,
-                    lastError = verification.blocker ?: step.lastError
-                )
-            }
-        }
-        val currentStepId = when {
-            nextStepId != null -> nextStepId
-            verification.currentStepStatus?.toStepStatus() == StepStatus.DONE -> {
-                steps.firstOrNull { it.status == StepStatus.IN_PROGRESS || it.status == StepStatus.TODO }?.id
-            }
-            else -> verifiedStepId
-        }
-        steps = steps.map { step ->
-            if (step.id == currentStepId && step.status == StepStatus.TODO) {
-                step.copy(status = StepStatus.IN_PROGRESS)
-            } else {
-                step
-            }
-        }
         val blocker = verification.blocker?.takeIf { it.isNotBlank() }
-        return plan.copy(
+        val updatedPlan = PlanProgression.applyVerification(
+            plan = plan,
+            verification = verification,
+            appendLimited = ::appendLimited
+        )
+        return updatedPlan.copy(
             status = if (blocker != null) PlanStatus.BLOCKED else PlanStatus.RUNNING,
             updatedAt = System.currentTimeMillis(),
-            steps = steps,
-            currentStepId = currentStepId,
             memory = plan.memory.copy(
                 observations = verification.evidence?.takeIf { it.isNotBlank() }?.let {
                     appendLimited(plan.memory.observations, "Verifier: $it")
@@ -472,4 +447,86 @@ $blockers
 
     private fun formatTime(time: Long): String =
         SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(time))
+}
+
+internal object PlanProgression {
+    fun applyVerification(
+        plan: AgentPlan,
+        verification: StepVerification,
+        appendLimited: (List<String>, String) -> List<String>
+    ): AgentPlan {
+        val currentIndex = plan.steps.indexOfFirst { it.id == plan.currentStepId }.coerceAtLeast(0)
+        val rawVerifiedStepId = verification.currentStepId
+            ?.takeIf { id -> plan.steps.any { it.id == id } }
+            ?: plan.currentStepId
+        val rawVerifiedIndex = plan.steps.indexOfFirst { it.id == rawVerifiedStepId }
+        val verifierStatus = verification.currentStepStatus.toStepStatusOrNull()
+
+        val verifiedStepId = when {
+            rawVerifiedIndex < 0 -> plan.currentStepId
+            rawVerifiedIndex < currentIndex && verifierStatus !in setOf(StepStatus.DONE, StepStatus.SKIPPED) -> plan.currentStepId
+            else -> rawVerifiedStepId
+        }
+        val verifiedIndex = plan.steps.indexOfFirst { it.id == verifiedStepId }.takeIf { it >= 0 } ?: currentIndex
+
+        var steps = plan.steps.mapIndexed { index, step ->
+            when {
+                step.id == verifiedStepId -> step.copy(
+                    status = mergeStatus(step.status, verifierStatus),
+                    evidence = verification.evidence?.let { appendLimited(step.evidence, it) } ?: step.evidence,
+                    lastError = verification.blocker ?: step.lastError
+                )
+                index < currentIndex && step.status == StepStatus.IN_PROGRESS -> step.copy(
+                    status = StepStatus.DONE,
+                    evidence = appendLimited(step.evidence, "Advanced past this step.")
+                )
+                else -> step
+            }
+        }
+
+        val nextStepFloorIndex = maxOf(currentIndex, verifiedIndex)
+        val nextStepId = verification.nextStepId
+            ?.takeIf { id -> plan.steps.indexOfFirst { it.id == id } >= nextStepFloorIndex }
+            ?.takeIf { id -> plan.steps.any { it.id == id } }
+        val currentStepId = when {
+            nextStepId != null -> nextStepId
+            verifierStatus == StepStatus.DONE -> steps
+                .drop(verifiedIndex + 1)
+                .firstOrNull { it.status == StepStatus.IN_PROGRESS || it.status == StepStatus.TODO }
+                ?.id
+            else -> verifiedStepId
+        }
+
+        val newCurrentIndex = steps.indexOfFirst { it.id == currentStepId }
+        steps = steps.mapIndexed { index, step ->
+            when {
+                index == newCurrentIndex && step.status == StepStatus.TODO -> step.copy(status = StepStatus.IN_PROGRESS)
+                newCurrentIndex >= 0 && index < newCurrentIndex && step.status == StepStatus.IN_PROGRESS -> step.copy(
+                    status = StepStatus.DONE,
+                    evidence = appendLimited(step.evidence, "Advanced past this step.")
+                )
+                else -> step
+            }
+        }
+
+        return plan.copy(steps = steps, currentStepId = currentStepId)
+    }
+
+    private fun mergeStatus(existing: StepStatus, incoming: StepStatus?): StepStatus {
+        if (incoming == null) return existing
+        if (existing in setOf(StepStatus.DONE, StepStatus.SKIPPED) && incoming !in setOf(StepStatus.DONE, StepStatus.SKIPPED)) {
+            return existing
+        }
+        return incoming
+    }
+
+    private fun String?.toStepStatusOrNull(): StepStatus? = when (this?.uppercase(Locale.US)) {
+        "TODO" -> StepStatus.TODO
+        "IN_PROGRESS" -> StepStatus.IN_PROGRESS
+        "DONE" -> StepStatus.DONE
+        "BLOCKED" -> StepStatus.BLOCKED
+        "FAILED" -> StepStatus.FAILED
+        "SKIPPED" -> StepStatus.SKIPPED
+        else -> null
+    }
 }

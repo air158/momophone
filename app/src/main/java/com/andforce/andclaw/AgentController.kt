@@ -83,6 +83,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private var consecutiveSameCount = 0
     private var lastFingerprint = ""
     private var loopRetryCount = 0
+    private var networkRetryCount = 0
     private var ordinaryFailureReplanCount = 0
     private var uiState = AgentUiState()
     private var activePlan: AgentPlan? = null
@@ -367,6 +368,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         consecutiveSameCount = 0
         lastFingerprint = ""
         loopRetryCount = 0
+        networkRetryCount = 0
         ordinaryFailureReplanCount = 0
         activePlan = planManager.createPlan(input)
         activePlan?.let { plan ->
@@ -405,6 +407,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         consecutiveSameCount = 0
         lastFingerprint = ""
         loopRetryCount = 0
+        networkRetryCount = 0
         ordinaryFailureReplanCount = 0
         addMessage("system", "Resuming plan: ${plan.summary}")
         sendRemotePlanProgress(plan, "Plan resumed")
@@ -527,10 +530,23 @@ object AgentController : ITgBridgeService, IAiConfigService {
             }
 
             if (action.type == "error") {
-                addMessage("system", "Error occurred: ${action.reason}")
-                activePlan = planManager.recordFailure(activePlan, action.reason ?: "AI returned error", terminal = true)
-                stopAgent(action.reason ?: "AI 返回错误")
+                val reason = action.reason ?: "AI returned error"
+                if (isRecoverableNetworkError(reason)) {
+                    scheduleNetworkRetry(reason)
+                } else {
+                    addMessage("system", "Error occurred: $reason")
+                    activePlan = planManager.recordFailure(activePlan, reason, terminal = true)
+                    stopAgent(reason)
+                }
             } else {
+                if (networkRetryCount > 0) {
+                    val recoveredMessage = "网络已恢复，继续执行任务。"
+                    addMessage("system", recoveredMessage)
+                    scope.launch {
+                        RemoteOutboundHelper.sendText(remoteBridge, activeRemoteSession, "✅ $recoveredMessage")
+                    }
+                }
+                networkRetryCount = 0
                 activePlan = planManager.recordAction(activePlan, action)
                 withContext(Dispatchers.Main) {
                     val aiDisplayMessage = "[Progress: ${action.progress ?: "Executing"}]\n${action.reason ?: "Thinking..."}"
@@ -540,9 +556,50 @@ object AgentController : ITgBridgeService, IAiConfigService {
             }
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {
-                addMessage("system", "AI Request Failed: ${e.message}")
-                stopAgent("AI 请求失败: ${e.message ?: "unknown"}")
+                val reason = e.message ?: "unknown"
+                if (isRecoverableNetworkError(reason)) {
+                    scheduleNetworkRetry(reason)
+                } else {
+                    addMessage("system", "AI Request Failed: $reason")
+                    stopAgent("AI 请求失败: $reason")
+                }
             }
+        }
+    }
+
+    private fun isRecoverableNetworkError(reason: String): Boolean {
+        val normalized = reason.lowercase()
+        return normalized.contains("network timeout") ||
+            normalized.contains("connection failed") ||
+            normalized.contains("timeout") ||
+            normalized.contains("timed out")
+    }
+
+    private fun nextNetworkRetryDelayMs(): Long {
+        val seconds = when (networkRetryCount) {
+            0 -> 5L
+            1 -> 10L
+            else -> 15L
+        }
+        return seconds * 1000L
+    }
+
+    private fun scheduleNetworkRetry(reason: String) {
+        if (!isAgentRunning) return
+
+        val delayMs = nextNetworkRetryDelayMs()
+        networkRetryCount++
+        val waitSeconds = delayMs / 1000L
+        val message = "网络暂时不可用：$reason。将在 ${waitSeconds} 秒后重试；恢复前会持续高频重试，尽快在第一时间恢复，可发送 /stop 停止。"
+        addMessage("system", message)
+        activePlan = planManager.recordFailure(activePlan, reason, terminal = false)
+
+        scope.launch {
+            RemoteOutboundHelper.sendText(remoteBridge, activeRemoteSession, "⏳ $message")
+            delay(delayMs)
+            if (!isAgentRunning) return@launch
+            addMessage("system", "Network retry #$networkRetryCount. Analyzing next step...")
+            executeAgentStep(uiState.userInput)
         }
     }
 
