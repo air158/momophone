@@ -51,9 +51,6 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private const val TAG = "AgentController"
     private const val PREFS_NAME = "agent_config"
     private const val DEFAULT_PROVIDER = "momoai"
-    private const val LEGACY_KIMI_URL = "https://api.kimi.com/coding"
-    private const val LEGACY_KIMI_MODEL = "kimi-k2.5"
-
     private lateinit var appContext: Context
     private lateinit var remoteBridge: IRemoteBridgeService
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -77,7 +74,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages
 
-    var config = ApiConfig(apiKey = BuildConfig.KIMI_KEY)
+    var config = ApiConfig()
         private set
     var isAgentRunning = false
         private set
@@ -234,12 +231,8 @@ object AgentController : ITgBridgeService, IAiConfigService {
         config = ApiConfig(
             provider = provider,
             apiKey = apiKey,
-            apiUrl = prefs.getString("ai_api_url", config.apiUrl)
-                ?.takeUnless { savedProvider != provider && it == LEGACY_KIMI_URL }
-                ?: config.apiUrl,
-            model = prefs.getString("ai_model", config.model)
-                ?.takeUnless { savedProvider != provider && it == LEGACY_KIMI_MODEL }
-                ?: config.model
+            apiUrl = prefs.getString("ai_api_url", config.apiUrl) ?: config.apiUrl,
+            model = prefs.getString("ai_model", config.model) ?: config.model
         )
         Log.d(TAG, "restoreConfig: provider=${config.provider}, apiKey=${Utils.maskKey(config.apiKey)}")
     }
@@ -257,7 +250,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
     override val apiUrl: String get() = config.apiUrl
     override val apiKey: String get() = config.apiKey
     override val model: String get() = config.model
-    override val defaultApiKey: String get() = BuildConfig.KIMI_KEY
+    override val defaultApiKey: String get() = ""
 
     override fun updateConfig(provider: String, apiUrl: String, apiKey: String, model: String) {
         config = config.copy(provider = provider, apiUrl = apiUrl, apiKey = apiKey, model = model)

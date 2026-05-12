@@ -25,7 +25,7 @@
 |---------|-------------|
 | **🚫 No Root Required** | Pure accessibility service implementation |
 | **💻 No PC Needed** | Runs entirely on phone, no ADB or PC companion |
-| **🧠 AI Powered** | Supports Kimi Code, Moonshot, and OpenAI-compatible APIs |
+| **🧠 AI Powered** | Supports Moonshot and OpenAI-compatible APIs |
 | **👁️ Screen Aware** | Real-time UI hierarchy + automatic screenshot for WebView/browser |
 | **🤏 Human-like Operations** | Simulate tap, swipe, long-press, text input |
 | **📸 Multimedia** | Photo, video recording, screen recording, screenshot, volume control |
@@ -40,7 +40,7 @@
 - **Android**: Android 12 (API 31) or higher
 - **Accessibility Service**: Must enable in Settings > Accessibility
 - **Overlay Permission**: For emergency stop button
-- **API Key**: Get from [Kimi Code](https://www.kimi.com/code/console), [Moonshot](https://platform.moonshot.cn/), or any OpenAI-compatible provider
+- **API Key**: Get from [Moonshot](https://platform.moonshot.cn/) or any OpenAI-compatible provider
 
 ### Installation
 

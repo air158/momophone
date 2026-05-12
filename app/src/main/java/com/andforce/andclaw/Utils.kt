@@ -11,8 +11,6 @@ import android.view.WindowManager
 import android.widget.Toast
 import com.andforce.andclaw.model.AiAction
 import com.andforce.andclaw.model.ApiConfig
-import com.demo.model.KimiApiClient
-import com.demo.model.KimiMessage
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -575,21 +573,7 @@ Rules:
     ): String = withContext(Dispatchers.IO) {
         val errorJson = "{\"summary\":\"Planner unavailable\",\"steps\":[]}"
         try {
-            val isKimi = config.provider.equals("Kimi Code", ignoreCase = true)
-            Log.d(TAG, "$logLabel: provider=${config.provider}, isKimi=$isKimi, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${maskKey(config.apiKey)}")
-            if (isKimi) {
-                val startedAt = SystemClock.elapsedRealtime()
-                return@withContext KimiApiClient.chat(
-                    messages = listOf(KimiMessage("user", userPrompt)),
-                    system = systemPrompt,
-                    apiKey = config.apiKey,
-                    baseUrl = config.apiUrl.ifEmpty { "https://api.kimi.com/coding" },
-                    model = config.model.ifEmpty { "kimi-k2.5" },
-                    maxTokens = PLANNER_MAX_TOKENS
-                ).also {
-                    Log.d(TAG, "$logLabel Kimi finished duration=${formatDuration(SystemClock.elapsedRealtime() - startedAt)} responseChars=${it.length}")
-                }
-            }
+            Log.d(TAG, "$logLabel: provider=${config.provider}, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${maskKey(config.apiKey)}")
 
             val url = if (config.apiUrl.contains("chat/completions")) config.apiUrl
             else "${config.apiUrl.removeSuffix("/")}/chat/completions"
@@ -699,9 +683,7 @@ Rules:
 
         try {
             val systemPrompt = buildAgentSystemPrompt(userGoal, isDeviceOwner)
-            val isKimi = config.provider.equals("Kimi Code", ignoreCase = true)
-
-            Log.d(TAG, "callLLMWithHistory: provider=${config.provider}, isKimi=$isKimi, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${maskKey(config.apiKey)}")
+            Log.d(TAG, "callLLMWithHistory: provider=${config.provider}, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${maskKey(config.apiKey)}")
 
             val planHint = planContext?.takeIf { it.isNotBlank() }?.let {
                 "Long-term Plan Context:\n$it\n\n"
@@ -728,30 +710,6 @@ Respond with JSON only."""
             }
             else
                 "${planHint}Current Screen State:\n$screenData\n\nPerform the next step. Respond with JSON only."
-
-            if (isKimi) {
-                val kimiMessages = mutableListOf<KimiMessage>()
-                history.forEach { msg ->
-                    val role = if (msg["role"] == "ai") "assistant" else msg["role"] ?: "user"
-                    kimiMessages.add(KimiMessage(role, msg["content"] ?: ""))
-                }
-                kimiMessages.add(KimiMessage("user", screenHint, imageBase64 = screenshotBase64))
-
-                val kimiBaseUrl = config.apiUrl.ifEmpty { "https://api.kimi.com/coding" }
-                val kimiModel = config.model.ifEmpty { "kimi-k2.5" }
-                Log.d(TAG, "Kimi request: baseUrl=$kimiBaseUrl, model=$kimiModel, apiKey=${maskKey(config.apiKey)}, messagesCount=${kimiMessages.size}, hasScreenshot=${screenshotBase64 != null}")
-
-                val startedAt = SystemClock.elapsedRealtime()
-                return@withContext KimiApiClient.chat(
-                    messages = kimiMessages,
-                    system = systemPrompt,
-                    apiKey = config.apiKey,
-                    baseUrl = kimiBaseUrl,
-                    model = kimiModel
-                ).also {
-                    Log.d(TAG, "Kimi request finished duration=${formatDuration(SystemClock.elapsedRealtime() - startedAt)} responseChars=${it.length}")
-                }
-            }
 
             // --- OpenAI 标准格式 ---
             val url = if (config.apiUrl.contains("chat/completions")) config.apiUrl

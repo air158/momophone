@@ -4,7 +4,7 @@ const features = [
   {
     icon: <BrainIcon />,
     title: 'AI 驱动',
-    desc: '支持 Kimi / OpenAI 兼容 API，用自然语言告诉手机你想做什么，AI 自主规划并执行。',
+    desc: '支持 OpenAI 兼容 API，用自然语言告诉手机你想做什么，AI 自主规划并执行。',
     color: 'cyan' as const,
   },
   {

@@ -195,7 +195,7 @@
 |------|------|------|-----|
 | 悬浮窗（急停按钮） | — | `FloatingStopWindow.show()` | `WindowManager` + `TYPE_APPLICATION_OVERLAY` |
 | 语音输入 | — | `MainActivity.startVoiceRecognition()` | `SpeechRecognizer` |
-| AI 决策（LLM） | — | `Utils.callLLMWithHistory()` | Kimi / OpenAI API |
+| AI 决策（LLM） | — | `Utils.callLLMWithHistory()` | OpenAI-compatible API |
 | 防循环检测 | — | `MainActivity.handleAction()` | 最近 3 次动作指纹对比 |
 | 人工确认 | — | `MainActivity.showActionConfirmDialog()` | `click` 操作需用户授权 |
 | 跨配置文件应用 | D | `DevicePolicyManagerGatewayImpl.setCrossProfilePackages()` | `DPM.setCrossProfilePackages()` |

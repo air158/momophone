@@ -31,7 +31,6 @@ This is a Gradle-based Android project with multiple modules.
 
 1. Create `local.properties` with your API keys:
    ```properties
-   kimi_key=your_kimi_api_key
    tg_token=your_telegram_bot_token  # Optional, for Telegram integration
    ```
 
@@ -46,7 +45,6 @@ This is a Gradle-based Android project with multiple modules.
 | Module | Purpose |
 |--------|---------|
 | `:app` | Main application module containing AI agent logic, UI, and accessibility service |
-| `:model` | Kimi API client (`KimiApiClient`) using Anthropic messages format |
 | `:mdm` | Mobile Device Management - Device Owner policies, Kiosk mode, silent app install |
 | `:services` | Kotlin interface definitions for cross-module communication (NOT AIDL) |
 | `:commonUtils` | Common Java/Kotlin utilities shared across modules |
@@ -83,9 +81,9 @@ setupdesign → setupcompat, setupdesign_strings
 
 **Utils** (`app/.../Utils.kt`)
 - `buildAgentSystemPrompt()`: Constructs the system prompt with all action type documentation
-- `callLLMWithHistory()`: Multi-provider LLM call supporting Kimi (Anthropic format) and OpenAI-compatible APIs
+- `callLLMWithHistory()`: OpenAI-compatible multimodal LLM call
 - `parseAction()`: Extracts JSON from LLM response, handles markdown fences and array wrapping
-- Supports multimodal input (screenshot base64) for both Kimi and OpenAI providers
+- Supports multimodal input (screenshot base64) for OpenAI-compatible providers
 
 **DpmBridge** (`app/.../DpmBridge.kt`)
 - Bridges AI actions to Device Policy Manager operations
@@ -144,14 +142,6 @@ The `:services` module defines pure Kotlin interfaces (not AIDL) for cross-modul
 | `IToaster` | Toast display |
 | `ISocketService` | Socket service start/stop |
 
-### Model Module
-
-`KimiApiClient` (`model/.../KimiApi.kt`):
-- Calls Kimi Coding API using Anthropic messages format (`/v1/messages`)
-- Supports multimodal input (text + base64 images)
-- Auth via `x-api-key` header with `anthropic-version: 2023-06-01`
-- Default model: `kimi-k2.5`, default base URL: `https://api.kimi.com/coding`
-
 ### MDM Capabilities
 
 The `:mdm` module provides Device Owner features:
@@ -208,7 +198,6 @@ See `ACTIONS.md` for complete capability matrix.
 
 ### BuildConfig Fields
 
-- `KIMI_KEY`: Injected from `local.properties` kimi_key
 - `TG_TOKEN`: Injected from `local.properties` tg_token
 
 ### Screen Recording
@@ -223,14 +212,13 @@ Screen capture is implemented via:
 
 ```kotlin
 ApiConfig(
-    provider = "Kimi Code",
-    apiKey = BuildConfig.KIMI_KEY,
-    apiUrl = "https://api.kimi.com/coding",
-    model = "kimi-k2.5"
+    provider = "momoai",
+    apiKey = "",
+    apiUrl = "https://momoai.pro/v1/chat/completions",
+    model = "momo_237"
 )
 ```
 
-Supports three providers via `IAiConfigService.updateConfig()`:
-- **Kimi Code**: Anthropic Messages format (`api.kimi.com/coding`), API Key from Kimi Code console
+Supports OpenAI-compatible providers via `IAiConfigService.updateConfig()`:
 - **Moonshot**: OpenAI-compatible format (`api.moonshot.cn/v1`), API Key from Moonshot platform
 - **OpenAI**: Any OpenAI-compatible API

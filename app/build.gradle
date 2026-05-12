@@ -27,7 +27,6 @@ android {
         multiDexEnabled true
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField "String", "KIMI_KEY", "\"${localProps.getProperty("kimi_key", "")}\""
         buildConfigField "String", "TG_TOKEN", "\"${localProps.getProperty("tg_token", "")}\""
     }
 
@@ -86,7 +85,6 @@ configurations.configureEach {
 }
 
 dependencies {
-    implementation project(':model')
     implementation project(':mdm')
     implementation project(':services')
     implementation project(':commonUtils')

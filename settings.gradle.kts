@@ -29,7 +29,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "AndClaw"
 include(":app")
-include(":model")
 include(":mdm")
 include(":setupdesign")
 include(":setupcompat")
