@@ -230,20 +230,29 @@ class AgentAccessibilityService : AccessibilityService() {
         if (nodes.isEmpty()) return "Empty Screen"
         val sb = StringBuilder()
         sb.append("Compact UI Snapshot ${screenWidth}x${screenHeight}. Use #id as node_id for click actions.\n")
-        windows.forEach { window ->
-            sb.append(
-                "W${window.index} ${window.type}" +
-                    if (window.active) " active" else "" +
-                    if (window.focused) " focused" else "" +
-                    window.packageName?.let { " pkg=${escapeUiValue(it)}" }.orEmpty() +
-                    "\n"
-            )
+
+        val appNodes = nodes.filter {
+            !it.isInputMethodNode() &&
+                it.windowType != AccessibilityWindowInfo.TYPE_SYSTEM
         }
         val imeOpen = nodes.any { it.isInputMethodNode() }
+
+        val visibleWindowIndices = appNodes.map { it.windowIndex }.toSet()
+        windows.forEach { window ->
+            if (window.index in visibleWindowIndices) {
+                sb.append(
+                    "W${window.index} ${window.type}" +
+                        if (window.active) " active" else "" +
+                        if (window.focused) " focused" else "" +
+                        window.packageName?.let { " pkg=${escapeUiValue(it)}" }.orEmpty() +
+                        "\n"
+                )
+            }
+        }
+
         if (imeOpen) sb.append("[Keyboard open]\n")
-        nodes
+        appNodes
             .sortedWith(compareBy<UiNodeSnapshot> { it.windowIndex }.thenBy { it.id })
-            .filter { !it.isInputMethodNode() }
             .forEach { node ->
                 sb.append(node.toPromptLine())
                 sb.append('\n')

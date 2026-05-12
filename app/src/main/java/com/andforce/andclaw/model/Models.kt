@@ -178,7 +178,8 @@ data class ApiConfig(
     val provider: String = "momoai",
     val apiKey: String = "",
     val apiUrl: String = "https://momoai.pro/v1/chat/completions",
-    val model: String = "momo_237"
+    val model: String = "momo_237",
+    val verifierModel: String = ""  // 留空则与 model 相同
 )
 
 data class ChatMessage(

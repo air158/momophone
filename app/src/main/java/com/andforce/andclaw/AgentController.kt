@@ -1382,7 +1382,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
             AiAction.TYPE_SWIPE,
             AiAction.TYPE_LONG_PRESS -> {
                 currentStepType in setOf(StepType.VERIFY, StepType.DECISION) ||
-                    routineSuccessSinceVerifier >= 5
+                    routineSuccessSinceVerifier >= 8
             }
 
             else -> false

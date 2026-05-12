@@ -82,6 +82,12 @@ object Utils {
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    private val verifierClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .build()
+
     /**
      * Agent 「http_request」动作：发起 HTTP/HTTPS 请求。
      * 返回 [Pair.first]=true 表示已收到 HTTP 响应（含 4xx/5xx）；仅连接/IO 失败时为 false。
@@ -198,14 +204,15 @@ App Query (read-only, no side effects):
 """ else ""
 
         val goalLower = userGoal.lowercase()
-        val needsCamera = goalLower.contains("拍照") || goalLower.contains("录像") ||
-            goalLower.contains("相机") || goalLower.contains("photo") ||
-            goalLower.contains("camera") || goalLower.contains("video") || goalLower.contains("selfie")
+        val needsCamera = goalLower.contains("拍照") || goalLower.contains("照片") ||
+            goalLower.contains("录像") || goalLower.contains("相机") ||
+            goalLower.contains("photo") || goalLower.contains("camera") ||
+            goalLower.contains("video") || goalLower.contains("selfie") || goalLower.contains("自拍")
         val needsScreenRecord = goalLower.contains("录屏") || goalLower.contains("屏幕录制") ||
             goalLower.contains("screen record") || goalLower.contains("录制屏幕")
         val needsVolume = goalLower.contains("音量") || goalLower.contains("静音") ||
             goalLower.contains("volume") || goalLower.contains("mute")
-        val needsAudioRecord = goalLower.contains("录音") || goalLower.contains("录制音频") ||
+        val needsAudioRecord = goalLower.contains("录音") || goalLower.contains("音频") ||
             goalLower.contains("语音录制") || goalLower.contains("audio record")
 
         val cameraSection = if (needsCamera) """
@@ -274,11 +281,7 @@ You can see the current screen UI tree and execute actions step by step.
 8. "download" — Download a file directly by URL (no browser needed).
 9. "http_request" — Call a REST/HTTP API (GET/POST/PUT/PATCH/DELETE/HEAD) with OkHttp. Use "data" for full URL (http:// or https://). Optional "http_method" (default GET), optional "text" for request body (JSON or plain text), optional "http_headers" object for headers (e.g. Authorization, Content-Type). Response body (truncated if very large) is shown in the next system message.
 10. "wait" — Wait for page loading or UI transition, then re-check screen.
-11. "camera" — Take photo or record video using device camera.
-12. "screen_record" — Record the screen using MediaProjection (start/stop).
-13. "volume" — Control device volume (set, adjust, mute/unmute, query).
-14. "audio_record" — Record audio using the device microphone (start/stop).
-${if (isDeviceOwner) "15. \"dpm\" — Device Policy Manager operations (Device Owner).\n16. " else "15. "}"finish" — Task is fully complete.
+${if (needsCamera) "11. \"camera\" — Take photo or record video using device camera.\n" else ""}${if (needsScreenRecord) "12. \"screen_record\" — Record the screen using MediaProjection (start/stop).\n" else ""}${if (needsVolume) "13. \"volume\" — Control device volume (set, adjust, mute/unmute, query).\n" else ""}${if (needsAudioRecord) "14. \"audio_record\" — Record audio using the device microphone (start/stop).\n" else ""}${if (isDeviceOwner) "15. \"dpm\" — Device Policy Manager operations (Device Owner).\n16. " else "11. "}"finish" — Task is fully complete.
 
 === INTENT ===
 Open URL/app: action:"android.intent.action.VIEW", data:"https://..."
@@ -383,7 +386,7 @@ Full schema:
   "progress": "Steps completed so far",
   "current_step_id": "current long-term plan step id, if a plan is provided",
   "reason": "Why this step is needed",
-  "type": "intent | click | swipe | long_press | text_input | global_action | screenshot | download | http_request | wait | camera | screen_record | volume | audio_record | wake_screen | ${if (isDeviceOwner) "dpm | " else ""}finish",
+  "type": "intent | click | swipe | long_press | text_input | global_action | screenshot | download | http_request | wait | wake_screen | ${if (needsCamera) "camera | " else ""}${if (needsScreenRecord) "screen_record | " else ""}${if (needsVolume) "volume | " else ""}${if (needsAudioRecord) "audio_record | " else ""}${if (isDeviceOwner) "dpm | " else ""}finish",
   "action": "intent action string (for intent type)",
   "data": "URI string (for intent/download/http_request type — full URL for http_request)",
   "extras": {},
@@ -394,10 +397,7 @@ Full schema:
   "duration": 0,
   "text": "text to input (text_input) or raw body (http_request)",
   "global_action": "back|home|recents|notifications|quick_settings",
-  "camera_action": "take_photo|start_video|stop_video (for camera type)",
-  "screen_record_action": "start_record|stop_record (for screen_record type)",
-  "volume_action": "set|adjust_up|adjust_down|mute|unmute|get (for volume type)",
-  "audio_record_action": "start_record|stop_record (for audio_record type)",
+${if (needsCamera) "  \"camera_action\": \"take_photo|start_video|stop_video (for camera type)\",\n" else ""}${if (needsScreenRecord) "  \"screen_record_action\": \"start_record|stop_record (for screen_record type)\",\n" else ""}${if (needsVolume) "  \"volume_action\": \"set|adjust_up|adjust_down|mute|unmute|get (for volume type)\",\n" else ""}${if (needsAudioRecord) "  \"audio_record_action\": \"start_record|stop_record (for audio_record type)\",\n" else ""}
   "http_method": "GET|POST|PUT|PATCH|DELETE|HEAD (for http_request type, default GET)",
   "http_headers": {"Header-Name": "value"}${if (isDeviceOwner) ",\n  \"dpm_action\": \"DPM operation name (for dpm type)\"" else ""},
   "package_name": "target package (for intent type)",
@@ -578,13 +578,20 @@ Rules:
         actionResult: String,
         config: ApiConfig,
         context: Context
-    ): String = callJsonOnlyLLM(
-        systemPrompt = buildPlannerSystemPrompt(),
-        userPrompt = buildStepVerifierPrompt(userGoal, planContext, screenData, actionResult),
-        config = config,
-        context = context,
-        logLabel = "stepVerifier"
-    )
+    ): String {
+        val verifierConfig = if (config.verifierModel.isNotBlank())
+            config.copy(model = config.verifierModel)
+        else
+            config
+        return callJsonOnlyLLM(
+            systemPrompt = buildPlannerSystemPrompt(),
+            userPrompt = buildStepVerifierPrompt(userGoal, planContext, screenData, actionResult),
+            config = verifierConfig,
+            context = context,
+            logLabel = "stepVerifier",
+            useVerifierClient = true
+        )
+    }
 
     suspend fun callLLM(prompt: String, config: ApiConfig): String =
         withContext(Dispatchers.IO) {
@@ -628,7 +635,8 @@ Rules:
         userPrompt: String,
         config: ApiConfig,
         context: Context,
-        logLabel: String
+        logLabel: String,
+        useVerifierClient: Boolean = false
     ): String = withContext(Dispatchers.IO) {
         val errorJson = "{\"summary\":\"Planner unavailable\",\"steps\":[]}"
         try {
@@ -655,7 +663,8 @@ Rules:
                 .header("Authorization", "Bearer ${config.apiKey}")
                 .build()
             val startedAt = SystemClock.elapsedRealtime()
-            openAiCompatibleClient.newCall(request).execute().use { response ->
+            val httpClient = if (useVerifierClient) verifierClient else openAiCompatibleClient
+            httpClient.newCall(request).execute().use { response ->
                 Log.d(TAG, "$logLabel HTTP finished code=${response.code} duration=${formatDuration(SystemClock.elapsedRealtime() - startedAt)}")
                 val responseString = response.body.string()
                 if (!response.isSuccessful) {
