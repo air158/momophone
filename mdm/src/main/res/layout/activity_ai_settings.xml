@@ -59,23 +59,32 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="AI API 配置"
+                            android:text="MomoAI 账号"
                             android:textAppearance="@style/TextAppearance.Mdm.Title"
                             android:textColor="@color/mdm_primary" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="登录账号自动获取 API Key"
+                            android:textAppearance="@style/TextAppearance.Mdm.Caption"
+                            android:textColor="@color/mdm_text_secondary" />
 
                         <com.google.android.material.textfield.TextInputLayout
                             style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="12dp"
-                            android:hint="Base URL"
+                            android:hint="邮箱或用户名"
                             app:boxStrokeColor="@color/mdm_primary"
                             app:hintTextColor="@color/mdm_text_secondary">
 
                             <com.google.android.material.textfield.TextInputEditText
-                                android:id="@+id/etBaseUrl"
+                                android:id="@+id/etMomoAccount"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
+                                android:inputType="textEmailAddress"
                                 android:textColor="@color/mdm_text_primary" />
 
                         </com.google.android.material.textfield.TextInputLayout>
@@ -85,7 +94,54 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="12dp"
-                            android:hint="API Key"
+                            android:hint="密码"
+                            app:boxStrokeColor="@color/mdm_primary"
+                            app:endIconMode="password_toggle"
+                            app:hintTextColor="@color/mdm_text_secondary">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/etMomoPassword"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:inputType="textPassword"
+                                android:textColor="@color/mdm_text_primary" />
+
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnMomoLogin"
+                            style="@style/Widget.Material3.Button"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="登录获取 API Key"
+                            app:backgroundTint="@color/mdm_primary" />
+
+                        <TextView
+                            android:id="@+id/tvMomoLoginResult"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:textAppearance="@style/TextAppearance.Mdm.Caption"
+                            android:visibility="gone" />
+
+                        <TextView
+                            android:id="@+id/tvMomoRegister"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:background="?attr/selectableItemBackground"
+                            android:padding="4dp"
+                            android:text="还没有账号？打开网页注册"
+                            android:textColor="@color/mdm_primary"
+                            android:textSize="13sp" />
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="16dp"
+                            android:hint="API Key (登录后自动填入)"
                             app:boxStrokeColor="@color/mdm_primary"
                             app:endIconMode="password_toggle"
                             app:hintTextColor="@color/mdm_text_secondary">
@@ -104,7 +160,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="12dp"
-                            android:hint="Model Name"
+                            android:hint="模型 Model"
                             app:boxStrokeColor="@color/mdm_primary"
                             app:hintTextColor="@color/mdm_text_secondary">
 
@@ -112,6 +168,7 @@
                                 android:id="@+id/etModel"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
+                                android:inputType="text"
                                 android:textColor="@color/mdm_text_primary" />
 
                         </com.google.android.material.textfield.TextInputLayout>
@@ -177,6 +234,51 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="@dimen/spacing_md"
                             android:text="配置远程连接"
+                            app:strokeColor="@color/mdm_primary" />
+
+                    </LinearLayout>
+
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- MDM / Kiosk 管理入口 -->
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="@dimen/activity_vertical_margin"
+                    app:cardBackgroundColor="@color/mdm_card_background"
+                    app:cardCornerRadius="@dimen/card_corner_radius"
+                    app:cardElevation="@dimen/card_elevation"
+                    app:strokeColor="@color/mdm_card_border"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="@dimen/card_padding">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="设备管理 (高级)"
+                            android:textAppearance="@style/TextAppearance.Mdm.Title"
+                            android:textColor="@color/mdm_primary" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/spacing_sm"
+                            android:text="Kiosk 模式、Device Owner 策略、应用静默安装等"
+                            android:textAppearance="@style/TextAppearance.Mdm.Body"
+                            android:textColor="@color/mdm_text_secondary" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btn_open_mdm"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/spacing_md"
+                            android:text="进入设备管理"
                             app:strokeColor="@color/mdm_primary" />
 
                     </LinearLayout>

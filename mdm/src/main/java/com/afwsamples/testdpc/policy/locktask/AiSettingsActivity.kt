@@ -1,9 +1,11 @@
 package com.afwsamples.testdpc.policy.locktask
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.View
+import android.widget.ArrayAdapter
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -29,6 +31,13 @@ class AiSettingsActivity : AppCompatActivity() {
 
     private companion object {
         const val DEFAULT_PROVIDER = "momoai"
+        const val DEFAULT_API_URL = "https://www.momoai.pro/api/v1/chat/completions"
+        const val DEFAULT_MODEL = "momoai/momo_196"
+        val MODEL_PRESETS = arrayOf(
+            "momoai/momo_196",
+            "momoai/momo_237"
+        )
+        const val REGISTER_URL = "https://www.momoai.pro/"
     }
 
     private lateinit var binding: ActivityAiSettingsBinding
@@ -43,15 +52,29 @@ class AiSettingsActivity : AppCompatActivity() {
 
         binding.toolbar.setNavigationOnClickListener { finish() }
 
+        binding.etModel.setAdapter(
+            ArrayAdapter(this, android.R.layout.simple_list_item_1, MODEL_PRESETS)
+        )
+        binding.etModel.threshold = 1
+        binding.etModel.setOnClickListener { binding.etModel.showDropDown() }
+
         loadCurrentConfig()
         observeRemoteChannelSummary()
 
+        binding.btnMomoLogin.setOnClickListener { loginMomoAccount() }
+        binding.tvMomoRegister.setOnClickListener {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REGISTER_URL)))
+            } catch (_: Exception) {
+            }
+        }
         binding.btnTestApi.setOnClickListener { testApiConnection() }
-
         binding.btnOpenRemoteChannelSettings.setOnClickListener {
             startActivity(Intent(this, RemoteChannelSettingsActivity::class.java))
         }
-
+        binding.btnOpenMdm.setOnClickListener {
+            startActivity(Intent(this, SetupKioskModeActivity::class.java))
+        }
         binding.btnSave.setOnClickListener { saveAndFinish() }
     }
 
@@ -115,10 +138,50 @@ class AiSettingsActivity : AppCompatActivity() {
     }
 
     private fun loadCurrentConfig() {
-        binding.etBaseUrl.setText(aiConfigService.apiUrl)
         val savedKey = aiConfigService.loadProviderKey(DEFAULT_PROVIDER)
         binding.etApiKey.setText(savedKey.ifEmpty { aiConfigService.apiKey })
-        binding.etModel.setText(aiConfigService.model, false)
+        // Model field is hidden; carry a stable default forward to updateConfig.
+        binding.etModel.setText(aiConfigService.model.ifEmpty { DEFAULT_MODEL }, false)
+    }
+
+    private fun loginMomoAccount() {
+        val account = binding.etMomoAccount.text.toString().trim()
+        val password = binding.etMomoPassword.text.toString()
+        if (account.isEmpty() || password.isEmpty()) {
+            showLoginResult("请输入账号和密码", isError = true)
+            return
+        }
+        binding.btnMomoLogin.isEnabled = false
+        showLoginResult("正在登录...", isError = false)
+
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                MomoAccountClient.login(account, password)
+            }
+            binding.btnMomoLogin.isEnabled = true
+            result.onSuccess { res ->
+                binding.etApiKey.setText(res.momoApiKey)
+                binding.etMomoPassword.setText("")
+                aiConfigService.saveProviderKey(DEFAULT_PROVIDER, res.momoApiKey)
+                aiConfigService.updateConfig(
+                    provider = DEFAULT_PROVIDER,
+                    apiUrl = DEFAULT_API_URL,
+                    apiKey = res.momoApiKey,
+                    model = DEFAULT_MODEL
+                )
+                showLoginResult("登录成功：${res.username} · 已自动填入 API Key", isError = false)
+            }.onFailure { e ->
+                showLoginResult(e.message ?: "登录失败", isError = true)
+            }
+        }
+    }
+
+    private fun showLoginResult(text: String, isError: Boolean) {
+        binding.tvMomoLoginResult.apply {
+            visibility = View.VISIBLE
+            this.text = text
+            setTextColor(getColor(if (isError) com.afwsamples.testdpc.R.color.mdm_status_error else com.afwsamples.testdpc.R.color.mdm_status_running))
+        }
     }
 
     private fun saveAndFinish() {
@@ -126,20 +189,19 @@ class AiSettingsActivity : AppCompatActivity() {
         aiConfigService.saveProviderKey(DEFAULT_PROVIDER, apiKey)
         aiConfigService.updateConfig(
             provider = DEFAULT_PROVIDER,
-            apiUrl = binding.etBaseUrl.text.toString(),
+            apiUrl = DEFAULT_API_URL,
             apiKey = apiKey,
-            model = binding.etModel.text.toString()
+            model = binding.etModel.text.toString().ifEmpty { DEFAULT_MODEL }
         )
         finish()
     }
 
     private fun testApiConnection() {
-        val baseUrl = binding.etBaseUrl.text.toString().trim()
         val apiKey = binding.etApiKey.text.toString().trim()
-        val model = binding.etModel.text.toString().trim()
+        val model = binding.etModel.text.toString().ifEmpty { DEFAULT_MODEL }
 
-        if (baseUrl.isEmpty() || apiKey.isEmpty() || model.isEmpty()) {
-            showApiResult("请填写完整的 API 配置", isError = true)
+        if (apiKey.isEmpty()) {
+            showApiResult("请先登录 MomoAI 账号获取 API Key", isError = true)
             return
         }
 
@@ -147,7 +209,7 @@ class AiSettingsActivity : AppCompatActivity() {
         showApiResult("正在测试连接...", isError = false)
 
         lifecycleScope.launch {
-            val result = testOpenAiCompatibleApi(baseUrl, apiKey, model)
+            val result = testOpenAiCompatibleApi(DEFAULT_API_URL, apiKey, model)
             binding.btnTestApi.isEnabled = true
             showApiResult(result.first, result.second)
         }
@@ -215,7 +277,7 @@ class AiSettingsActivity : AppCompatActivity() {
         binding.tvApiTestResult.apply {
             visibility = View.VISIBLE
             this.text = text
-            setTextColor(getColor(if (isError) android.R.color.holo_red_dark else android.R.color.holo_green_dark))
+            setTextColor(getColor(if (isError) com.afwsamples.testdpc.R.color.mdm_status_error else com.afwsamples.testdpc.R.color.mdm_status_running))
         }
     }
 }

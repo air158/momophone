@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/background"
@@ -10,71 +11,211 @@
         android:id="@+id/appBarLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@drawable/bg_toolbar"
+        android:background="@color/background"
         app:elevation="0dp">
 
         <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/toolbar"
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
-            app:title="Andclaw AI Agent"
+            app:title="Andclaw"
+            app:subtitle="@string/status_idle"
             app:titleTextAppearance="@style/TextAppearance.Andclaw.Title"
-            app:titleTextColor="@color/text_primary" />
+            app:titleTextColor="@color/text_primary"
+            app:subtitleTextColor="@color/text_secondary" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/divider_dark" />
 
     </com.google.android.material.appbar.AppBarLayout>
 
-    <FrameLayout
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:orientation="vertical"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/chatRecyclerView"
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:clipToPadding="false"
-            android:paddingHorizontal="@dimen/spacing_md"
-            android:paddingVertical="@dimen/spacing_sm" />
+            android:layout_height="0dp"
+            android:layout_weight="1">
 
-        <!-- 空状态提示 -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/chatRecyclerView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingHorizontal="@dimen/spacing_md"
+                android:paddingVertical="@dimen/spacing_sm" />
+
+            <LinearLayout
+                android:id="@+id/emptyState"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="@dimen/spacing_2xl"
+                android:visibility="gone">
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/notLoggedInBanner"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="@dimen/spacing_xl"
+                    android:visibility="gone"
+                    app:cardBackgroundColor="@color/error_container"
+                    app:cardCornerRadius="@dimen/radius_md"
+                    app:cardElevation="0dp"
+                    app:strokeColor="@color/error"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="@dimen/spacing_lg">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/not_logged_in_title"
+                            android:textAppearance="@style/TextAppearance.Andclaw.Title"
+                            android:textColor="@color/error" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/spacing_sm"
+                            android:text="@string/not_logged_in_desc"
+                            android:textAppearance="@style/TextAppearance.Andclaw.Body"
+                            android:textColor="@color/text_primary" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnGoLogin"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/spacing_md"
+                            android:text="@string/not_logged_in_cta"
+                            app:backgroundTint="@color/primary" />
+
+                    </LinearLayout>
+
+                </com.google.android.material.card.MaterialCardView>
+
+                <ImageView
+                    android:layout_width="64dp"
+                    android:layout_height="64dp"
+                    android:alpha="0.45"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_mic"
+                    app:tint="@color/text_secondary" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/spacing_lg"
+                    android:text="@string/empty_state_title"
+                    android:textAppearance="@style/TextAppearance.Andclaw.Title"
+                    android:textColor="@color/text_primary" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/spacing_sm"
+                    android:gravity="center"
+                    android:text="@string/empty_state_subtitle"
+                    android:textAppearance="@style/TextAppearance.Andclaw.Body"
+                    android:textColor="@color/text_secondary" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/spacing_xl"
+                    android:text="@string/empty_state_examples_title"
+                    android:textAppearance="@style/TextAppearance.Andclaw.Caption"
+                    android:textColor="@color/text_hint" />
+
+                <TextView
+                    android:id="@+id/examplePrompt1"
+                    style="@style/Andclaw.ExampleChip"
+                    android:text="@string/example_prompt_1" />
+
+                <TextView
+                    android:id="@+id/examplePrompt2"
+                    style="@style/Andclaw.ExampleChip"
+                    android:text="@string/example_prompt_2" />
+
+                <TextView
+                    android:id="@+id/examplePrompt3"
+                    style="@style/Andclaw.ExampleChip"
+                    android:text="@string/example_prompt_3" />
+
+                <TextView
+                    android:id="@+id/examplePrompt4"
+                    style="@style/Andclaw.ExampleChip"
+                    android:text="@string/example_prompt_4" />
+
+            </LinearLayout>
+        </FrameLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/divider_dark" />
+
         <LinearLayout
-            android:id="@+id/emptyState"
+            android:id="@+id/inputBar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:gravity="center"
-            android:orientation="vertical"
-            android:padding="@dimen/spacing_2xl"
-            android:visibility="gone">
+            android:background="@color/background"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="@dimen/spacing_md"
+            android:paddingVertical="@dimen/spacing_sm">
 
-            <!-- AI 图标占位 -->
-            <ImageView
-                android:layout_width="80dp"
-                android:layout_height="80dp"
-                android:alpha="0.6"
-                android:contentDescription="@null"
-                android:src="@drawable/ic_mic"
-                android:tint="@color/text_secondary" />
-
-            <TextView
-                android:layout_width="wrap_content"
+            <EditText
+                android:id="@+id/etCommand"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/spacing_lg"
-                android:text="@string/empty_state_title"
-                android:textAppearance="@style/TextAppearance.Andclaw.Title"
-                android:textColor="@color/text_primary" />
+                android:layout_weight="1"
+                android:background="@drawable/bg_input"
+                android:hint="@string/input_hint"
+                android:inputType="textMultiLine|textCapSentences"
+                android:maxLines="4"
+                android:minHeight="44dp"
+                android:paddingHorizontal="@dimen/spacing_lg"
+                android:paddingVertical="@dimen/spacing_sm"
+                android:textColor="@color/text_primary"
+                android:textColorHint="@color/text_hint"
+                android:textSize="@dimen/text_size_body" />
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/spacing_sm"
-                android:gravity="center"
-                android:text="@string/empty_state_subtitle"
-                android:textAppearance="@style/TextAppearance.Andclaw.Body"
-                android:textColor="@color/text_secondary" />
+            <ImageButton
+                android:id="@+id/btnStop"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_marginStart="@dimen/spacing_sm"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/stop_task"
+                android:src="@drawable/ic_close"
+                android:visibility="gone"
+                app:tint="@color/error"
+                tools:visibility="visible" />
+
+            <ImageButton
+                android:id="@+id/btnSend"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_marginStart="@dimen/spacing_sm"
+                android:background="@drawable/bg_send_button"
+                android:contentDescription="@string/send_task"
+                android:src="@drawable/ic_send"
+                app:tint="@color/on_primary" />
 
         </LinearLayout>
 
-    </FrameLayout>
+    </LinearLayout>
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

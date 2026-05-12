@@ -27,7 +27,12 @@
             android:name="com.andforce.andclaw.ChatHistoryActivity"
             android:exported="true"
             android:theme="@style/Theme.Andclaw"
-            android:windowSoftInputMode="adjustResize" />
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
         <activity
             android:name="com.andforce.andclaw.ActionTestActivity"
             android:theme="@style/Theme.Andclaw" />
@@ -46,6 +51,9 @@
         <service
             android:name="com.andforce.andclaw.ScreenRecordService"
             android:foregroundServiceType="mediaProjection" />
+        <service
+            android:name="com.andforce.andclaw.overlay.StatusOverlayService"
+            android:exported="false" />
         <service
             android:name="com.andforce.andclaw.AgentAccessibilityService"
             android:exported="true"

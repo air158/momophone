@@ -18,8 +18,20 @@
     <string name="selected_count">已选 %d 项</string>
 
     <!-- 空状态提示 -->
-    <string name="empty_state_title">暂无对话记录</string>
-    <string name="empty_state_subtitle">仅展示历史记录，不支持输入。\n请通过 Telegram 发送指令，在此查看 AI 的回复与操作。</string>
+    <string name="not_logged_in_title">尚未登录</string>
+    <string name="not_logged_in_desc">登录 MomoAI 账号或填入 API Key 后才能让 AI 执行指令</string>
+    <string name="not_logged_in_cta">去登录 / 设置</string>
+    <string name="empty_state_title">开始一个任务</string>
+    <string name="empty_state_subtitle">在下方输入指令，或通过 Telegram 发送。\n本地与远程自动同步。</string>
+    <string name="empty_state_examples_title">试试这些</string>
+    <string name="example_prompt_1">打开微信</string>
+    <string name="example_prompt_2">截图保存到相册</string>
+    <string name="example_prompt_3">把屏幕调到 50% 亮度</string>
+    <string name="example_prompt_4">打开设置 → WLAN</string>
+    <string name="status_idle">空闲</string>
+    <string name="status_running">运行中</string>
+    <string name="stop_task">停止</string>
+    <string name="settings_title">设置</string>
 
     <!-- 动作测试页面 -->
     <string name="action_section_screenshot">截屏</string>

@@ -18,8 +18,20 @@
     <string name="selected_count">%d selected</string>
 
     <!-- Empty state -->
-    <string name="empty_state_title">No conversation records</string>
-    <string name="empty_state_subtitle">Displaying history only, input not supported.\nSend commands via Telegram to view AI responses here.</string>
+    <string name="not_logged_in_title">Not signed in</string>
+    <string name="not_logged_in_desc">Sign in with MomoAI or set an API key before sending commands.</string>
+    <string name="not_logged_in_cta">Sign in / Settings</string>
+    <string name="empty_state_title">Start a task</string>
+    <string name="empty_state_subtitle">Type a command below, or send it via Telegram.\nLocal and remote stay in sync.</string>
+    <string name="empty_state_examples_title">Try these</string>
+    <string name="example_prompt_1">Open WeChat</string>
+    <string name="example_prompt_2">Take a screenshot and save it</string>
+    <string name="example_prompt_3">Set screen brightness to 50%</string>
+    <string name="example_prompt_4">Open Settings → Wi-Fi</string>
+    <string name="status_idle">Idle</string>
+    <string name="status_running">Running</string>
+    <string name="stop_task">Stop</string>
+    <string name="settings_title">Settings</string>
 
     <!-- Action test page -->
     <string name="action_section_screenshot">Screenshot</string>

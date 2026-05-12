@@ -4,7 +4,7 @@
          Andclaw Material Design 3 深色主题
          ============================================ -->
 
-    <style name="Theme.Andclaw" parent="Theme.Material3.Dark.NoActionBar">
+    <style name="Theme.Andclaw" parent="Theme.Material3.Light.NoActionBar">
         <!-- 主色 -->
         <item name="colorPrimary">@color/primary</item>
         <item name="colorPrimaryVariant">@color/primary_variant</item>
@@ -34,8 +34,8 @@
         <!-- 状态栏 -->
         <item name="android:statusBarColor">@color/background</item>
         <item name="android:navigationBarColor">@color/background</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
 
         <!-- 文字 -->
         <item name="android:textColorPrimary">@color/text_primary</item>
@@ -48,7 +48,7 @@
     </style>
 
     <!-- 透明主题 (用于悬浮窗等) -->
-    <style name="Theme.Andclaw.Transparent" parent="Theme.Material3.Dark.NoActionBar">
+    <style name="Theme.Andclaw.Transparent" parent="Theme.Material3.Light.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowNoTitle">true</item>
@@ -149,5 +149,18 @@
 
     <style name="TextAppearance.Andclaw.Caption" parent="TextAppearance.Material3.LabelSmall">
         <item name="android:textColor">@color/text_secondary</item>
+    </style>
+
+    <!-- 空状态示例 prompt chip -->
+    <style name="Andclaw.ExampleChip" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">@dimen/spacing_sm</item>
+        <item name="android:background">@drawable/bg_example_chip</item>
+        <item name="android:paddingHorizontal">@dimen/spacing_lg</item>
+        <item name="android:paddingVertical">@dimen/spacing_sm</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
     </style>
 </resources>

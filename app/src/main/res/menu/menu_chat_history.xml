@@ -9,9 +9,15 @@
         app:showAsAction="ifRoom" />
 
     <item
+        android:id="@+id/action_settings"
+        android:icon="@drawable/ic_settings"
+        android:title="@string/settings_title"
+        app:showAsAction="ifRoom" />
+
+    <item
         android:id="@+id/action_clear_all"
         android:icon="@android:drawable/ic_menu_delete"
         android:title="@string/clear_all"
-        app:showAsAction="ifRoom" />
+        app:showAsAction="never" />
 
 </menu>

@@ -188,7 +188,7 @@ data class ApiConfig(
     val provider: String = "momoai",
     val apiKey: String = "",
     val apiUrl: String = "https://momoai.pro/v1/chat/completions",
-    val model: String = "momo_237",
+    val model: String = "momo_196",
     val verifierModel: String = "",  // 留空则与 model 相同
     /** 模型上下文窗口（tokens）。留空则按 model 名走 HistoryBudget 的猜测表。 */
     val contextWindow: Int? = null
