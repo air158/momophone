@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.media.AudioManager
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
@@ -88,10 +89,40 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private var ordinaryFailureReplanCount = 0
     private var uiState = AgentUiState()
     private var activePlan: AgentPlan? = null
+    private var nextStepId = 1
+
+    @Volatile
+    private var activeStepTiming: StepTiming? = null
 
     private val dpmBridge by lazy { DpmBridge(appContext) }
     private lateinit var chatDao: ChatMessageDao
     private lateinit var planManager: PlanManager
+
+    private class StepTiming(
+        val id: Int,
+        goal: String,
+        hasInputScreenshot: Boolean
+    ) {
+        val startedAtMs: Long = SystemClock.elapsedRealtime()
+        private var lastMarkMs: Long = startedAtMs
+        private val shortGoal = goal.take(80)
+
+        init {
+            Log.d(TAG, "step#$id timing start hasInputScreenshot=$hasInputScreenshot goal=$shortGoal")
+        }
+
+        @Synchronized
+        fun mark(stage: String, details: String? = null) {
+            val now = SystemClock.elapsedRealtime()
+            val delta = now - lastMarkMs
+            val total = now - startedAtMs
+            lastMarkMs = now
+            val suffix = details?.takeIf { it.isNotBlank() }?.let { " $it" }.orEmpty()
+            Log.d(TAG, "step#$id timing stage=$stage delta=${formatDuration(delta)} total=${formatDuration(total)}$suffix")
+        }
+
+        fun elapsedMs(): Long = SystemClock.elapsedRealtime() - startedAtMs
+    }
 
     private fun screenshotSuccessMessage(session: RemoteSession?, fileName: String): String {
         val base = "截图已保存：Pictures/Andclaw/$fileName"
@@ -112,6 +143,24 @@ object AgentController : ITgBridgeService, IAiConfigService {
             else -> ""
         }
         return base + suffix
+    }
+
+    private fun formatDuration(ms: Long): String =
+        if (ms < 1000L) "${ms}ms" else String.format("%.2fs", ms / 1000.0)
+
+    private fun appendStepTiming(text: String, timing: StepTiming? = activeStepTiming): String {
+        timing ?: return text
+        return "$text\n\n[step#${timing.id} 耗时 ${formatDuration(timing.elapsedMs())}]"
+    }
+
+    private suspend fun sendRemoteText(
+        session: RemoteSession?,
+        text: String,
+        replyToMessageId: Long? = null,
+        includeStepTiming: Boolean = true
+    ) {
+        val body = if (includeStepTiming) appendStepTiming(text) else text
+        RemoteOutboundHelper.sendText(remoteBridge, session, body, replyToMessageId)
     }
 
     fun init(context: Context, dao: ChatMessageDao, bridge: IRemoteBridgeService) {
@@ -256,21 +305,17 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 val accessInfo = if (allowedId == 0L) "⚠️ 未设置 Chat ID 白名单" else "✅ Chat ID 已锁定"
                 val agentInfo = if (isAgentRunning) "▶️ Agent 运行中: ${uiState.userInput}" else "⏸ Agent 空闲"
                 val body = "Andclaw 状态\n$agentInfo\n$accessInfo\n你的 Chat ID: $chatId"
-                RemoteOutboundHelper.sendText(
-                    remoteBridge, telegramSession, body, replyToMessageId = msgId
-                )
+                sendRemoteText(telegramSession, body, replyToMessageId = msgId)
             }
             "/stop" -> {
                 withContext(Dispatchers.Main) { stopAgent("用户请求停止") }
-                RemoteOutboundHelper.sendText(
-                    remoteBridge, telegramSession, "✅ 已停止当前任务", replyToMessageId = msgId
-                )
+                sendRemoteText(telegramSession, "✅ 已停止当前任务", replyToMessageId = msgId)
             }
             else -> {
                 val busy = withContext(Dispatchers.Main) { isAgentRunning to uiState.userInput }
                 if (busy.first) {
-                    RemoteOutboundHelper.sendText(
-                        remoteBridge, telegramSession,
+                    sendRemoteText(
+                        telegramSession,
                         "⏳ Agent 正在执行上一任务，不会开始新任务。请稍后或发送 /stop 停止。进行中的任务：${busy.second}",
                         replyToMessageId = msgId
                     )
@@ -295,19 +340,17 @@ object AgentController : ITgBridgeService, IAiConfigService {
             "/status" -> {
                 val agentInfo = if (isAgentRunning) "▶️ Agent 运行中: ${uiState.userInput}" else "⏸ Agent 空闲"
                 val body = "Andclaw 状态\n$agentInfo\n会话: ${msg.sessionKey}"
-                RemoteOutboundHelper.sendText(remoteBridge, clawSession, body, replyToMessageId = null)
+                sendRemoteText(clawSession, body, replyToMessageId = null)
             }
             "/stop" -> {
                 withContext(Dispatchers.Main) { stopAgent("用户请求停止") }
-                RemoteOutboundHelper.sendText(
-                    remoteBridge, clawSession, "✅ 已停止当前任务", replyToMessageId = null
-                )
+                sendRemoteText(clawSession, "✅ 已停止当前任务", replyToMessageId = null)
             }
             else -> {
                 val busy = withContext(Dispatchers.Main) { isAgentRunning to uiState.userInput }
                 if (busy.first) {
-                    RemoteOutboundHelper.sendText(
-                        remoteBridge, clawSession,
+                    sendRemoteText(
+                        clawSession,
                         "⏳ Agent 正在执行上一任务，不会开始新任务。请稍后或发送 /stop 停止。进行中的任务：${busy.second}",
                         replyToMessageId = null
                     )
@@ -333,19 +376,17 @@ object AgentController : ITgBridgeService, IAiConfigService {
             "/status" -> {
                 val agentInfo = if (isAgentRunning) "▶️ Agent 运行中: ${uiState.userInput}" else "⏸ Agent 空闲"
                 val body = "Andclaw 状态\n$agentInfo\n会话: ${msg.chatId}"
-                RemoteOutboundHelper.sendText(remoteBridge, feishuSession, body, replyToMessageId = null)
+                sendRemoteText(feishuSession, body, replyToMessageId = null)
             }
             "/stop" -> {
                 withContext(Dispatchers.Main) { stopAgent("用户请求停止") }
-                RemoteOutboundHelper.sendText(
-                    remoteBridge, feishuSession, "✅ 已停止当前任务", replyToMessageId = null
-                )
+                sendRemoteText(feishuSession, "✅ 已停止当前任务", replyToMessageId = null)
             }
             else -> {
                 val busy = withContext(Dispatchers.Main) { isAgentRunning to uiState.userInput }
                 if (busy.first) {
-                    RemoteOutboundHelper.sendText(
-                        remoteBridge, feishuSession,
+                    sendRemoteText(
+                        feishuSession,
                         "⏳ Agent 正在执行上一任务，不会开始新任务。请稍后或发送 /stop 停止。进行中的任务：${busy.second}",
                         replyToMessageId = null
                     )
@@ -419,6 +460,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
     fun stopAgent(reason: String? = null) {
         val sessionToNotify = _activeRemoteSession
+        val timingToNotify = activeStepTiming
         val wasRunning = isAgentRunning
         isAgentRunning = false
         uiState = uiState.copy(isRunning = false, status = "Agent Stopped.")
@@ -429,16 +471,24 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
         if (wasRunning && sessionToNotify != null) {
             val suffix = reason?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
+            val body = appendStepTiming("⏹ Agent 已停止$suffix", timingToNotify)
             scope.launch(Dispatchers.IO) {
-                RemoteOutboundHelper.sendText(remoteBridge, sessionToNotify, "⏹ Agent 已停止$suffix")
+                RemoteOutboundHelper.sendText(remoteBridge, sessionToNotify, body)
+                activeStepTiming = null
             }
+        } else if (wasRunning) {
+            activeStepTiming = null
         }
     }
 
     private suspend fun generateInitialPlan(input: String) {
+        activeStepTiming?.mark("initial_planner_started")
         val screenData = AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        activeStepTiming?.mark("initial_planner_screen_captured", "chars=${screenData.length}")
         val response = Utils.callInitialPlanner(input, screenData, config, appContext)
+        activeStepTiming?.mark("initial_planner_response_received", "chars=${response.length}")
         val draft = planManager.parseDraft(response)
+        activeStepTiming?.mark("initial_planner_parsed", "hasDraft=${draft != null}")
         val upgraded = planManager.replaceWithDraft(activePlan, draft)
         if (upgraded != null && upgraded !== activePlan && draft?.steps?.isNotEmpty() == true) {
             activePlan = upgraded
@@ -449,7 +499,9 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
     private suspend fun replanActivePlan(reason: String) {
         val planContext = planManager.toPromptContext(activePlan) ?: return
+        activeStepTiming?.mark("replan_started", reason)
         val screenData = AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        activeStepTiming?.mark("replan_screen_captured", "chars=${screenData.length}")
         val response = Utils.callPlanPatchPlanner(
             userGoal = uiState.userInput,
             screenData = screenData,
@@ -458,7 +510,9 @@ object AgentController : ITgBridgeService, IAiConfigService {
             config = config,
             context = appContext
         )
+        activeStepTiming?.mark("replan_response_received", "chars=${response.length}")
         val patch = planManager.parsePatch(response)
+        activeStepTiming?.mark("replan_parsed", "hasPatch=${patch != null}")
         val patched = planManager.applyPatch(activePlan, patch)
         if (patched != null && patch != null) {
             activePlan = patched
@@ -470,15 +524,20 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private suspend fun executeAgentStep(userInput: String, screenshotBase64: String? = null) {
         if (!isAgentRunning) return
 
+        val stepTiming = StepTiming(nextStepId++, userInput, hasInputScreenshot = screenshotBase64 != null)
+        activeStepTiming = stepTiming
         RemoteOutboundHelper.sendTyping(remoteBridge, activeRemoteSession)
+        stepTiming.mark("remote_typing_sent")
 
         val svc = AgentAccessibilityService.instance
         val screenData = svc?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        stepTiming.mark("screen_hierarchy_captured", "chars=${screenData.length}")
 
-        var finalScreenshot = screenshotBase64
-        if (finalScreenshot == null && svc?.isWebViewContext() == true) {
-            finalScreenshot = captureScreenBase64()
-        }
+        val finalScreenshot = screenshotBase64
+        stepTiming.mark(
+            "screenshot_policy",
+            if (finalScreenshot == null) "skipped_auto_screenshot=true" else "provided_by_recovery=true"
+        )
 
         val currentMessages = _messages.value
         val historyContext = currentMessages.takeLast(12).mapNotNull {
@@ -504,6 +563,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 else -> null
             }
         }
+        stepTiming.mark("history_built", "items=${historyContext.size}")
 
         try {
             val isDeviceOwner = Util.isDeviceOwner(appContext)
@@ -514,10 +574,13 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 screenshotBase64 = finalScreenshot,
                 planContext = planManager.toPromptContext(activePlan)
             )
+            stepTiming.mark("llm_response_received", "chars=${response.length}")
             var action = Utils.parseAction(response)
+            stepTiming.mark("llm_response_parsed", "type=${action.type}")
 
             if (action.type == "error" && action.reason?.contains("Failed to parse") == true) {
                 Log.w(TAG, "LLM returned non-JSON, retrying with correction prompt")
+                stepTiming.mark("llm_parse_retry_started")
                 val retryHistory = historyContext.toMutableList().apply {
                     add(mapOf("role" to "assistant", "content" to response))
                     add(mapOf("role" to "user", "content" to "Invalid response. Output a single JSON object only, no other text."))
@@ -527,11 +590,14 @@ object AgentController : ITgBridgeService, IAiConfigService {
                     isDeviceOwner = isDeviceOwner,
                     planContext = planManager.toPromptContext(activePlan)
                 )
+                stepTiming.mark("llm_retry_response_received", "chars=${response.length}")
                 action = Utils.parseAction(response)
+                stepTiming.mark("llm_retry_response_parsed", "type=${action.type}")
             }
 
             if (action.type == "error") {
                 val reason = action.reason ?: "AI returned error"
+                stepTiming.mark("step_error", reason)
                 if (isRecoverableNetworkError(reason)) {
                     scheduleNetworkRetry(reason)
                 } else {
@@ -544,11 +610,12 @@ object AgentController : ITgBridgeService, IAiConfigService {
                     val recoveredMessage = "网络已恢复，继续执行任务。"
                     addMessage("system", recoveredMessage)
                     scope.launch {
-                        RemoteOutboundHelper.sendText(remoteBridge, activeRemoteSession, "✅ $recoveredMessage")
+                        sendRemoteText(activeRemoteSession, "✅ $recoveredMessage")
                     }
                 }
                 networkRetryCount = 0
                 activePlan = planManager.recordAction(activePlan, action)
+                stepTiming.mark("action_recorded", "type=${action.type}")
                 withContext(Dispatchers.Main) {
                     val aiDisplayMessage = "[Progress: ${action.progress ?: "Executing"}]\n${action.reason ?: "Thinking..."}"
                     addMessage("ai", aiDisplayMessage, action)
@@ -556,6 +623,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 }
             }
         } catch (e: Exception) {
+            stepTiming.mark("step_exception", e.message.orEmpty())
             withContext(Dispatchers.Main) {
                 val reason = e.message ?: "unknown"
                 if (isRecoverableNetworkError(reason)) {
@@ -596,7 +664,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         activePlan = planManager.recordFailure(activePlan, reason, terminal = false)
 
         scope.launch {
-            RemoteOutboundHelper.sendText(remoteBridge, activeRemoteSession, "⏳ $message")
+            sendRemoteText(activeRemoteSession, "⏳ $message")
             delay(delayMs)
             if (!isAgentRunning) return@launch
             addMessage("system", "Network retry #$networkRetryCount. Analyzing next step...")
@@ -607,6 +675,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private fun handleAction(action: AiAction) {
         if (!isAgentRunning) return
 
+        activeStepTiming?.mark("handle_action_started", "type=${action.type}")
         val fingerprint = when (action.type) {
             AiAction.TYPE_HTTP_REQUEST -> "${action.type}_${action.data}_${action.httpMethod}"
             AiAction.TYPE_CLICK -> "${action.type}_${action.nodeId ?: "xy"}_${action.x}_${action.y}_${action.targetText.orEmpty()}"
@@ -723,6 +792,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         if (!isAgentRunning) return
 
         scope.launch(Dispatchers.IO) {
+            activeStepTiming?.mark("action_execution_started", "type=${action.type}")
             var success = false
             var outputMsg: String? = null
             try {
@@ -1168,6 +1238,10 @@ object AgentController : ITgBridgeService, IAiConfigService {
             }
 
             val finalMsg = outputMsg
+            activeStepTiming?.mark(
+                "action_execution_finished",
+                "type=${action.type} success=$success result=${finalMsg?.take(120).orEmpty()}"
+            )
             if (success && isAgentRunning) {
                 withContext(Dispatchers.Main) {
                     val msg = if (finalMsg != null) "Action success.\n$finalMsg" else "Action success."
@@ -1178,7 +1252,8 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 continueAfterSuccessfulAction(action, finalMsg)
             } else {
                 withContext(Dispatchers.Main) {
-                    activePlan = planManager.recordFailure(activePlan, finalMsg ?: "Action failed", terminal = true)
+                    val willRetry = ordinaryFailureReplanCount < 2
+                    activePlan = planManager.recordFailure(activePlan, finalMsg ?: "Action failed", terminal = !willRetry)
                     if (finalMsg != null) addMessage("system", finalMsg)
                 }
                 handleOrdinaryActionFailure(finalMsg ?: "动作执行失败")
@@ -1195,18 +1270,40 @@ object AgentController : ITgBridgeService, IAiConfigService {
             return
         }
         ordinaryFailureReplanCount++
+        val patchPlan = shouldPatchPlanForFailure(reason)
         withContext(Dispatchers.Main) {
-            addMessage("system", "Action failed. Replanning before retry... ($ordinaryFailureReplanCount/2)")
+            val retryMode = if (patchPlan) "Replanning before retry" else "Refreshing UI before retry"
+            addMessage("system", "Action failed. $retryMode... ($ordinaryFailureReplanCount/2)")
         }
-        replanActivePlan("Ordinary action failure: $reason")
+        if (patchPlan) {
+            replanActivePlan("Ordinary action failure: $reason")
+        } else {
+            activeStepTiming?.mark("replan_skipped", reason)
+        }
         if (!isAgentRunning) return
         executeAgentStep(uiState.userInput)
     }
 
+    private fun shouldPatchPlanForFailure(reason: String): Boolean {
+        val normalized = reason.lowercase()
+        val transientUiFailures = listOf(
+            "node_id",
+            "latest ui snapshot",
+            "target_text",
+            "input-method keyboard",
+            "click gesture was cancelled",
+            "no focused input field"
+        )
+        return transientUiFailures.none { normalized.contains(it) }
+    }
+
     private suspend fun continueAfterSuccessfulAction(action: AiAction, actionResult: String? = null) {
+        activeStepTiming?.mark("ui_wait_started", "type=${action.type}")
         waitAfterSuccessfulAction(action)
+        activeStepTiming?.mark("ui_wait_finished", "type=${action.type}")
         if (!isAgentRunning) return
         verifyCurrentPlanStep(actionResult)
+        activeStepTiming?.mark("step_complete")
         if (!isAgentRunning) return
         withContext(Dispatchers.Main) {
             addMessage("system", "UI settled. Analyzing next step...")
@@ -1216,7 +1313,9 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
     private suspend fun verifyCurrentPlanStep(actionResult: String?) {
         val planContext = planManager.toPromptContext(activePlan) ?: return
+        activeStepTiming?.mark("plan_verifier_started")
         val screenData = AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        activeStepTiming?.mark("plan_verifier_screen_captured", "chars=${screenData.length}")
         val response = Utils.callStepVerifier(
             userGoal = uiState.userInput,
             screenData = screenData,
@@ -1225,7 +1324,9 @@ object AgentController : ITgBridgeService, IAiConfigService {
             config = config,
             context = appContext
         )
+        activeStepTiming?.mark("plan_verifier_response_received", "chars=${response.length}")
         val verification = planManager.parseVerification(response)
+        activeStepTiming?.mark("plan_verifier_parsed", "hasVerification=${verification != null}")
         if (verification != null) {
             val normalizedVerification = normalizeVerifierBlocker(verification)
             activePlan = planManager.applyVerification(activePlan, normalizedVerification)
@@ -1301,7 +1402,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         val session = activeRemoteSession ?: return
         val text = planManager.formatProgress(plan, title) ?: return
         scope.launch(Dispatchers.IO) {
-            RemoteOutboundHelper.sendText(remoteBridge, session, text)
+            sendRemoteText(session, text, includeStepTiming = false)
         }
     }
 
@@ -1415,9 +1516,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         val sessionToEcho = activeRemoteSession
         if (RemoteOutboundHelper.shouldAttemptRemoteEcho(role, sessionToEcho)) {
             scope.launch(Dispatchers.IO) {
-                RemoteOutboundHelper.sendText(
-                    remoteBridge, sessionToEcho, "[$role] $content"
-                )
+                sendRemoteText(sessionToEcho, "[$role] $content")
             }
         }
     }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
@@ -35,6 +36,9 @@ object Utils {
         .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
+
+    private fun formatDuration(ms: Long): String =
+        if (ms < 1000L) "${ms}ms" else String.format("%.2fs", ms / 1000.0)
 
     private val openAiCompatibleClient = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
@@ -201,7 +205,8 @@ Tap a specific UI element from the current UI tree.
 - If node_id is unavailable, use x/y at the CENTER of the target and include "target_text" for safety validation.
 - The UI tree includes label, role, package, window_type, clickable/editable flags, bounds, click_bounds, and center.
 - For text rows inside a clickable parent, click_bounds/center is the actionable parent area.
-- Do NOT treat search suggestion rows as the search/submit button. Search suggestions usually contain the query text and are list items; the submit button usually has a label/description like "Search", "搜索", "Go", "Enter", or a keyboard action. If the goal is to search for a phrase, first click the search input, use text_input for the exact phrase, then click the real submit/search button or press the keyboard search action if visible.
+- Do NOT treat search suggestion rows as the search/submit button. Search suggestions usually contain the query text and are list items; they are often not reliable click targets. The submit button usually has a label/description like "Search", "搜索", "Go", "Enter", "搜索按钮", or a magnifier icon outside the suggestion list. If the goal is to search for a phrase, first click the editable search input, use text_input for the exact phrase, then click the real app search/submit button outside the keyboard/suggestion list.
+- If system feedback says node_id was not found, the UI changed while you were thinking. Re-read the current UI tree and choose a fresh node_id; do not retry the old node_id.
 - NEVER click anything from window_type:INPUT_METHOD. That is the keyboard/IME area and may insert a newline or type an unintended key. Use text_input for typing. For submitting a comment/reply/post/message after text input, click the app's own send/post/comment button outside the keyboard.
 - When multiple nearby targets look similar, use the exact label/description from the UI tree in target_text. For example, if the goal is "AI视频", do not click an element whose label is "AI助手".
 
@@ -296,7 +301,7 @@ $dpmSection
 4. Use "text_input" to fill text fields (click the field first, then type). This works in both native apps and browsers.
 5. Use "global_action" for system navigation (back, home, etc.).
 6. BROWSER/WEBVIEW: When a screenshot is attached and shows a browser or web page, the UI tree text may be incomplete or inaccurate. ALWAYS trust the screenshot over the UI tree for determining page content and element positions. In browser pages, after clicking an input field, use "text_input" to type — the system handles browser input automatically.
-7. SEARCH FLOWS: When searching, distinguish between the search input, suggestion rows, app shortcuts, and the final search/submit button. If the user asked to search "AI视频", do not click a suggestion/app entry like "AI助手" unless the user explicitly asked for that entry.
+7. SEARCH FLOWS: When searching, distinguish between the search input, suggestion rows, app shortcuts, and the final search/submit button. If the user asked to search "AI视频", do not click a suggestion/app entry like "AI助手" or a suggestion row that only repeats "AI视频"; type the exact query into the editable input and use the app's real search/submit control.
 8. Use "download" to download files directly — do NOT open a browser just to download.
 9. Use "http_request" when the user needs to call an HTTP API, webhooks, or fetch JSON/text from a URL. Do NOT open a browser for simple API calls.
 10. Use "screenshot" when user asks to capture the screen.
@@ -545,7 +550,9 @@ Rules:
                 .header("Authorization", "Bearer ${config.apiKey}")
                 .build()
 
+            val startedAt = SystemClock.elapsedRealtime()
             openAiCompatibleClient.newCall(request).execute().use { response ->
+                Log.d(TAG, "callLLM HTTP finished code=${response.code} duration=${formatDuration(SystemClock.elapsedRealtime() - startedAt)}")
                 if (!response.isSuccessful) throw Exception("API Error: ${response.code}")
                 val body = response.body.string()
 
@@ -597,7 +604,9 @@ Rules:
                 .post(requestBody.toRequestBody("application/json".toMediaType()))
                 .header("Authorization", "Bearer ${config.apiKey}")
                 .build()
+            val startedAt = SystemClock.elapsedRealtime()
             openAiCompatibleClient.newCall(request).execute().use { response ->
+                Log.d(TAG, "$logLabel HTTP finished code=${response.code} duration=${formatDuration(SystemClock.elapsedRealtime() - startedAt)}")
                 val responseString = response.body.string()
                 if (!response.isSuccessful) {
                     Log.e(TAG, "$logLabel API Error ${response.code}: $responseString")
@@ -726,13 +735,16 @@ Respond with JSON only."""
                 val kimiModel = config.model.ifEmpty { "kimi-k2.5" }
                 Log.d(TAG, "Kimi request: baseUrl=$kimiBaseUrl, model=$kimiModel, apiKey=${maskKey(config.apiKey)}, messagesCount=${kimiMessages.size}, hasScreenshot=${screenshotBase64 != null}")
 
+                val startedAt = SystemClock.elapsedRealtime()
                 return@withContext KimiApiClient.chat(
                     messages = kimiMessages,
                     system = systemPrompt,
                     apiKey = config.apiKey,
                     baseUrl = kimiBaseUrl,
                     model = kimiModel
-                )
+                ).also {
+                    Log.d(TAG, "Kimi request finished duration=${formatDuration(SystemClock.elapsedRealtime() - startedAt)} responseChars=${it.length}")
+                }
             }
 
             // --- OpenAI 标准格式 ---
@@ -787,7 +799,9 @@ Respond with JSON only."""
                 .header("Authorization", "Bearer ${config.apiKey}")
                 .build()
 
+            val startedAt = SystemClock.elapsedRealtime()
             openAiCompatibleClient.newCall(request).execute().use { response ->
+                Log.d(TAG, "OpenAI HTTP finished code=${response.code} duration=${formatDuration(SystemClock.elapsedRealtime() - startedAt)}")
                 val responseString = response.body.string()
                 if (!response.isSuccessful) {
                     Log.e(TAG, "OpenAI API Error ${response.code}: $responseString")
