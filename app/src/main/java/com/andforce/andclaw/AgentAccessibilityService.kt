@@ -33,8 +33,27 @@ class AgentAccessibilityService : AccessibilityService() {
     @Volatile
     private var lastNodeSnapshots: Map<Int, UiNodeSnapshot> = emptyMap()
 
+    private data class UiWindowSnapshot(
+        val index: Int,
+        val type: String,
+        val active: Boolean,
+        val focused: Boolean,
+        val packageName: String?
+    )
+
+    private data class UiSnapshot(
+        val screenWidth: Int,
+        val screenHeight: Int,
+        val windows: List<UiWindowSnapshot>,
+        val nodes: List<UiNodeSnapshot>
+    )
+
     private data class UiNodeSnapshot(
         val id: Int,
+        val parentId: Int?,
+        val promptDepth: Int,
+        val text: String,
+        val description: String,
         val label: String,
         val bounds: Rect,
         val clickBounds: Rect,
@@ -47,6 +66,12 @@ class AgentAccessibilityService : AccessibilityService() {
         val clickNodePath: List<Int>,
         val clickable: Boolean,
         val editable: Boolean,
+        val scrollable: Boolean,
+        val checkable: Boolean,
+        val checked: Boolean,
+        val selected: Boolean,
+        val longClickable: Boolean,
+        val focusable: Boolean,
         val enabled: Boolean,
         val focused: Boolean
     )
@@ -54,55 +79,76 @@ class AgentAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() { instance = this }
 
     fun captureScreenHierarchy(): String {
-        val sb = StringBuilder()
+        val snapshot = captureUiSnapshot()
+        lastNodeSnapshots = snapshot.nodes.associateBy { it.id }
+        return snapshot.toPromptView()
+    }
+
+    private fun captureUiSnapshot(): UiSnapshot {
         val snapshots = mutableListOf<UiNodeSnapshot>()
+        val windowSnapshots = mutableListOf<UiWindowSnapshot>()
         val nextId = intArrayOf(1)
         val interactiveWindows = sortedInteractiveWindows()
 
         if (interactiveWindows.isNotEmpty()) {
             interactiveWindows.forEachIndexed { windowIndex, window ->
                 val root = window.root ?: return@forEachIndexed
-                sb.append("Window{type:${windowTypeName(window.type)}, active:${window.isActive}, focused:${window.isFocused}}\n")
+                windowSnapshots += UiWindowSnapshot(
+                    index = windowIndex,
+                    type = windowTypeName(window.type),
+                    active = window.isActive,
+                    focused = window.isFocused,
+                    packageName = root.packageName?.toString()
+                )
                 parseNode(
                     root,
-                    sb,
                     snapshots,
                     nextId,
                     clickableAncestorBounds = null,
                     clickableAncestorPath = null,
                     windowType = window.type,
                     windowIndex = windowIndex,
-                    nodePath = emptyList()
+                    nodePath = emptyList(),
+                    parentPromptId = null,
+                    promptDepth = 0
                 )
             }
         } else {
-            val root = rootInActiveWindow ?: return "Empty Screen"
+            val root = rootInActiveWindow ?: return UiSnapshot(screenWidth(), screenHeight(), emptyList(), emptyList())
+            windowSnapshots += UiWindowSnapshot(
+                index = 0,
+                type = windowTypeName(0),
+                active = true,
+                focused = true,
+                packageName = root.packageName?.toString()
+            )
             parseNode(
                 root,
-                sb,
                 snapshots,
                 nextId,
                 clickableAncestorBounds = null,
                 clickableAncestorPath = null,
                 windowType = 0,
                 windowIndex = 0,
-                nodePath = emptyList()
+                nodePath = emptyList(),
+                parentPromptId = null,
+                promptDepth = 0
             )
         }
-        lastNodeSnapshots = snapshots.associateBy { it.id }
-        return sb.toString()
+        return UiSnapshot(screenWidth(), screenHeight(), windowSnapshots, snapshots)
     }
 
     private fun parseNode(
         node: AccessibilityNodeInfo?,
-        sb: StringBuilder,
         snapshots: MutableList<UiNodeSnapshot>,
         nextId: IntArray,
         clickableAncestorBounds: Rect?,
         clickableAncestorPath: List<Int>?,
         windowType: Int,
         windowIndex: Int,
-        nodePath: List<Int>
+        nodePath: List<Int>,
+        parentPromptId: Int?,
+        promptDepth: Int
     ) {
         node ?: return
         val rect = Rect()
@@ -110,17 +156,23 @@ class AgentAccessibilityService : AccessibilityService() {
         val text = node.text?.toString().orEmpty()
         val description = node.contentDescription?.toString().orEmpty()
         val label = listOf(text, description).filter { it.isNotBlank() }.distinct().joinToString(" | ")
-        val isRelevant = node.isClickable || node.isEditable || label.isNotBlank()
+        val isRelevant = shouldPromptNode(node, label, rect)
         val ownClickableBounds = if (node.isClickable && !rect.isEmpty) Rect(rect) else null
         val ownClickablePath = if (node.isClickable && !rect.isEmpty) nodePath else null
         val clickBounds = ownClickableBounds ?: clickableAncestorBounds ?: Rect(rect)
         val clickNodePath = ownClickablePath ?: clickableAncestorPath ?: nodePath
 
+        var currentPromptId = parentPromptId
+        var currentPromptDepth = promptDepth
         if (isRelevant && !rect.isEmpty) {
             val id = nextId[0]++
             val className = node.className?.toString().orEmpty()
             val snapshot = UiNodeSnapshot(
                 id = id,
+                parentId = parentPromptId,
+                promptDepth = promptDepth,
+                text = text,
+                description = description,
                 label = label,
                 bounds = Rect(rect),
                 clickBounds = Rect(clickBounds),
@@ -133,40 +185,117 @@ class AgentAccessibilityService : AccessibilityService() {
                 clickNodePath = clickNodePath,
                 clickable = node.isClickable || clickableAncestorBounds != null,
                 editable = node.isEditable,
+                scrollable = node.isScrollable,
+                checkable = node.isCheckable,
+                checked = isNodeChecked(node),
+                selected = node.isSelected,
+                longClickable = node.isLongClickable,
+                focusable = node.isFocusable,
                 enabled = node.isEnabled,
                 focused = node.isFocused
             )
             snapshots.add(snapshot)
-            val centerX = clickBounds.centerX()
-            val centerY = clickBounds.centerY()
-            sb.append(
-                "{id:$id, role:'${escapeUiValue(className.substringAfterLast('.'))}', " +
-                    "label:'${escapeUiValue(label.ifBlank { "(no label)" })}', " +
-                    "view_id:'${escapeUiValue(node.viewIdResourceName.orEmpty())}', " +
-                    "package:'${escapeUiValue(node.packageName?.toString().orEmpty())}', " +
-                    "window_type:${windowTypeName(windowType)}, " +
-                    "clickable:${snapshot.clickable}, editable:${node.isEditable}, enabled:${node.isEnabled}, focused:${node.isFocused}, " +
-                    "bounds:[${rect.left},${rect.top},${rect.right},${rect.bottom}], " +
-                    "click_bounds:[${clickBounds.left},${clickBounds.top},${clickBounds.right},${clickBounds.bottom}], " +
-                    "center:[$centerX,$centerY]}\n"
-            )
+            currentPromptId = id
+            currentPromptDepth = promptDepth + 1
         }
         val nextClickableAncestor = ownClickableBounds ?: clickableAncestorBounds
         val nextClickableAncestorPath = ownClickablePath ?: clickableAncestorPath
         for (i in 0 until node.childCount) {
             parseNode(
                 node.getChild(i),
-                sb,
                 snapshots,
                 nextId,
                 nextClickableAncestor,
                 nextClickableAncestorPath,
                 windowType,
                 windowIndex,
-                nodePath + i
+                nodePath + i,
+                currentPromptId,
+                currentPromptDepth
             )
         }
     }
+
+    private fun shouldPromptNode(node: AccessibilityNodeInfo, label: String, rect: Rect): Boolean {
+        if (rect.isEmpty || !node.isVisibleToUser) return false
+        if (node.isEditable || node.isScrollable || node.isClickable || node.isLongClickable) return true
+        if (node.isCheckable || isNodeChecked(node) || node.isSelected || node.isFocused) return true
+        return label.isNotBlank()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isNodeChecked(node: AccessibilityNodeInfo): Boolean = node.isChecked
+
+    private fun UiSnapshot.toPromptView(): String {
+        if (nodes.isEmpty()) return "Empty Screen"
+        val sb = StringBuilder()
+        sb.append("Compact UI Snapshot ${screenWidth}x${screenHeight}. Use #id as node_id for click actions.\n")
+        windows.forEach { window ->
+            sb.append(
+                "W${window.index} ${window.type}" +
+                    if (window.active) " active" else "" +
+                    if (window.focused) " focused" else "" +
+                    window.packageName?.let { " pkg=${escapeUiValue(it)}" }.orEmpty() +
+                    "\n"
+            )
+        }
+        nodes
+            .sortedWith(compareBy<UiNodeSnapshot> { it.windowIndex }.thenBy { it.id })
+            .forEach { node ->
+                sb.append(node.toPromptLine())
+                sb.append('\n')
+            }
+        return sb.toString()
+    }
+
+    private fun UiNodeSnapshot.toPromptLine(): String {
+        val indent = "  ".repeat(promptDepth.coerceIn(0, 6))
+        val flags = promptFlags().takeIf { it.isNotEmpty() }?.joinToString(",", prefix = " flags=" ).orEmpty()
+        val view = viewId?.substringAfter(":id/")?.takeIf { it.isNotBlank() }?.let { " view=$it" }.orEmpty()
+        val nodeBounds = if (bounds == clickBounds) "" else " node=${bounds.shortRect()}"
+        return "$indent#$id ${promptRole()} \"${escapeUiValue(promptLabel())}\"" +
+            view +
+            " tap=${clickBounds.shortRect()}" +
+            nodeBounds +
+            flags
+    }
+
+    private fun UiNodeSnapshot.promptRole(): String = when {
+        editable -> "input"
+        scrollable -> "scroll"
+        clickable || longClickable -> "action"
+        checkable -> "toggle"
+        className.contains("Button", ignoreCase = true) || className == "按钮" -> "button"
+        className.contains("TextView", ignoreCase = true) -> "text"
+        className.contains("Image", ignoreCase = true) -> "image"
+        else -> className.substringAfterLast('.').ifBlank { "node" }
+    }
+
+    private fun UiNodeSnapshot.promptLabel(): String {
+        val base = label.ifBlank {
+            viewId?.substringAfter(":id/")?.takeIf { it.isNotBlank() } ?: "(no label)"
+        }
+        return base.replace(Regex("\\s+"), " ").trim().let {
+            if (it.length <= 120) it else it.take(117) + "..."
+        }
+    }
+
+    private fun UiNodeSnapshot.promptFlags(): List<String> = buildList {
+        if (clickable) add("tap")
+        if (editable) add("edit")
+        if (scrollable) add("scroll")
+        if (selected) add("selected")
+        if (checked) add("checked")
+        if (focused) add("focused")
+        if (!enabled) add("disabled")
+        if (isInputMethodNode()) add("ime")
+    }
+
+    private fun Rect.shortRect(): String = "[${left},${top},${right},${bottom}]"
+
+    private fun screenWidth(): Int = resources.displayMetrics.widthPixels
+
+    private fun screenHeight(): Int = resources.displayMetrics.heightPixels
 
     private fun sortedInteractiveWindows(): List<AccessibilityWindowInfo> =
         windows.orEmpty()
