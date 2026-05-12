@@ -205,7 +205,10 @@ class AgentAccessibilityService : AccessibilityService() {
             ?: resolveNode(snapshot.windowIndex, snapshot.nodePath)
             ?: return false
 
-        val clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        var clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        if (!clicked && snapshot.label.isNotBlank() && !snapshot.isInputMethodNode()) {
+            clicked = clickPointAndWaitForCompletion(snapshot.clickBounds.centerX(), snapshot.clickBounds.centerY())
+        }
         if (clicked) waitForUiStabilization(timeoutMs = 900, quietMs = 160, minWaitMs = 260)
         return clicked
     }
@@ -233,7 +236,10 @@ class AgentAccessibilityService : AccessibilityService() {
 
         val node = resolveNode(snapshot.windowIndex, snapshot.clickNodePath)
             ?: resolveNode(snapshot.windowIndex, snapshot.nodePath)
-        val clicked = node?.performAction(AccessibilityNodeInfo.ACTION_CLICK) ?: false
+        var clicked = node?.performAction(AccessibilityNodeInfo.ACTION_CLICK) ?: false
+        if (!clicked) {
+            clicked = clickPointAndWaitForCompletion(snapshot.clickBounds.centerX(), snapshot.clickBounds.centerY())
+        }
         if (clicked) waitForUiStabilization(timeoutMs = 900, quietMs = 160, minWaitMs = 260)
         return clicked
     }
@@ -265,16 +271,16 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     fun describeNodeAt(x: Int, y: Int): String? {
-        val root = rootInActiveWindow ?: return null
-        return findDeepestNodeAt(root, x, y)?.let { node ->
+        val node = findBestNodeAt(x, y) ?: return null
+        return node.let {
             val rect = Rect()
-            node.getBoundsInScreen(rect)
-            val text = node.text?.toString().orEmpty()
-            val description = node.contentDescription?.toString().orEmpty()
+            it.node.getBoundsInScreen(rect)
+            val text = it.node.text?.toString().orEmpty()
+            val description = it.node.contentDescription?.toString().orEmpty()
             val label = listOf(text, description).filter { it.isNotBlank() }.distinct().joinToString(" | ")
-            val className = node.className?.toString().orEmpty().substringAfterLast('.')
-            val windowType = node.window?.type ?: 0
-            "label='${escapeUiValue(label)}', role='${escapeUiValue(className)}', package='${escapeUiValue(node.packageName?.toString().orEmpty())}', window_type=${windowTypeName(windowType)}, bounds=[${rect.left},${rect.top},${rect.right},${rect.bottom}]"
+            val className = it.node.className?.toString().orEmpty().substringAfterLast('.')
+            val windowType = it.node.window?.type ?: 0
+            "label='${escapeUiValue(label)}', role='${escapeUiValue(className)}', package='${escapeUiValue(it.node.packageName?.toString().orEmpty())}', window_type=${windowTypeName(windowType)}, bounds=[${rect.left},${rect.top},${rect.right},${rect.bottom}]"
         }
     }
 
@@ -304,12 +310,14 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     fun doesNodeAtMatchTarget(x: Int, y: Int, targetText: String): Boolean {
-        val root = rootInActiveWindow ?: return true
-        val node = findDeepestNodeAt(root, x, y) ?: return true
         val target = normalizeTargetText(targetText)
         if (target.isEmpty()) return true
-        val labels = collectNodeAndAncestorLabels(node)
-        return labels.any { label ->
+        val labels = mutableListOf<String>()
+        val roots = sortedInteractiveWindows().mapNotNull { it.root }
+            .ifEmpty { listOfNotNull(rootInActiveWindow) }
+        roots.forEach { root -> collectLabelsAtPoint(root, x, y, labels) }
+        if (labels.isEmpty()) return true
+        return labels.distinct().any { label ->
             targetMatchScore(normalizeTargetText(label), target) > 0
         }
     }
@@ -328,32 +336,71 @@ class AgentAccessibilityService : AccessibilityService() {
         return 0
     }
 
-    private fun findDeepestNodeAt(node: AccessibilityNodeInfo, x: Int, y: Int): AccessibilityNodeInfo? {
-        val rect = Rect()
-        node.getBoundsInScreen(rect)
-        if (!rect.contains(x, y)) return null
-        for (i in node.childCount - 1 downTo 0) {
-            val child = node.getChild(i) ?: continue
-            val match = findDeepestNodeAt(child, x, y)
-            if (match != null) return match
-        }
-        return node
+    private data class NodeAtPoint(
+        val node: AccessibilityNodeInfo,
+        val depth: Int,
+        val area: Int
+    )
+
+    private fun findBestNodeAt(x: Int, y: Int): NodeAtPoint? {
+        val candidates = mutableListOf<NodeAtPoint>()
+        val roots = sortedInteractiveWindows().mapNotNull { it.root }
+            .ifEmpty { listOfNotNull(rootInActiveWindow) }
+        roots.forEach { root -> collectNodesAtPoint(root, x, y, depth = 0, candidates) }
+        if (candidates.isEmpty()) return null
+        return candidates.sortedWith(
+            compareByDescending<NodeAtPoint> { nodeMeaningScore(it.node) }
+                .thenByDescending { it.depth }
+                .thenBy { it.area }
+        ).first()
     }
 
-    private fun collectNodeAndAncestorLabels(node: AccessibilityNodeInfo): List<String> {
-        val labels = mutableListOf<String>()
-        var current: AccessibilityNodeInfo? = node
-        var depth = 0
-        while (current != null && depth < 8) {
-            val text = current.text?.toString().orEmpty()
-            val description = current.contentDescription?.toString().orEmpty()
-            listOf(text, description)
-                .filter { it.isNotBlank() }
-                .forEach { labels.add(it) }
-            current = current.parent
-            depth++
+    private fun nodeMeaningScore(node: AccessibilityNodeInfo): Int {
+        val label = nodeLabel(node)
+        var score = 0
+        if (label.isNotBlank()) score += 1000
+        if (node.isClickable) score += 120
+        if (node.isFocusable) score += 80
+        if (node.isEnabled) score += 20
+        if (label.contains("按钮") || label.contains("button", ignoreCase = true)) score += 40
+        return score
+    }
+
+    private fun nodeLabel(node: AccessibilityNodeInfo): String {
+        val text = node.text?.toString().orEmpty()
+        val description = node.contentDescription?.toString().orEmpty()
+        return listOf(text, description).filter { it.isNotBlank() }.distinct().joinToString(" | ")
+    }
+
+    private fun collectNodesAtPoint(
+        node: AccessibilityNodeInfo,
+        x: Int,
+        y: Int,
+        depth: Int,
+        candidates: MutableList<NodeAtPoint>
+    ) {
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        if (!rect.contains(x, y)) return
+        candidates.add(NodeAtPoint(node, depth, rect.width() * rect.height()))
+        for (i in 0 until node.childCount) {
+            collectNodesAtPoint(node.getChild(i) ?: continue, x, y, depth + 1, candidates)
         }
-        return labels.distinct()
+    }
+
+    private fun collectLabelsAtPoint(
+        node: AccessibilityNodeInfo,
+        x: Int,
+        y: Int,
+        labels: MutableList<String>
+    ) {
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        if (!rect.contains(x, y)) return
+        nodeLabel(node).takeIf { it.isNotBlank() }?.let { labels.add(it) }
+        for (i in 0 until node.childCount) {
+            collectLabelsAtPoint(node.getChild(i) ?: continue, x, y, labels)
+        }
     }
 
     fun click(x: Int, y: Int) {
@@ -374,6 +421,10 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     suspend fun clickAndWaitForCompletion(x: Int, y: Int): Boolean {
+        return clickPointAndWaitForCompletion(x, y)
+    }
+
+    private suspend fun clickPointAndWaitForCompletion(x: Int, y: Int): Boolean {
         val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 50)).build()
