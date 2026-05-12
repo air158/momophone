@@ -23,4 +23,16 @@
         android:textColor="#FFF5F2EA"
         android:textSize="12sp" />
 
+    <TextView
+        android:id="@+id/output"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:ellipsize="end"
+        android:maxWidth="220dp"
+        android:maxLines="1"
+        android:textColor="#FFD9D2C0"
+        android:textSize="11sp"
+        android:visibility="gone" />
+
 </LinearLayout>

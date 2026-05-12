@@ -1836,12 +1836,32 @@ object AgentController : ITgBridgeService, IAiConfigService {
             }
         }
 
-        val sessionToEcho = activeRemoteSession
-        if (RemoteOutboundHelper.shouldAttemptRemoteEcho(role, sessionToEcho)) {
-            scope.launch(Dispatchers.IO) {
-                sendRemoteText(sessionToEcho, "[$role] $content")
+        val activeSession = activeRemoteSession
+        if (activeSession != null) {
+            if (RemoteOutboundHelper.shouldAttemptRemoteEcho(role, activeSession)) {
+                scope.launch(Dispatchers.IO) {
+                    sendRemoteText(activeSession, "[$role] $content")
+                }
+            }
+        } else {
+            // 本地发起的任务：把运行反馈同步到已配置的默认远程频道（当前为 Telegram）。
+            val fallback = defaultLocalEchoSession()
+            if (fallback != null) {
+                scope.launch(Dispatchers.IO) {
+                    sendRemoteText(fallback, "[local/$role] $content")
+                }
             }
         }
+    }
+
+    private fun defaultLocalEchoSession(): RemoteSession? {
+        val chatId = try { channelConfig.getTgChatId() } catch (_: Exception) { 0L }
+        if (chatId == 0L) return null
+        return RemoteSession(
+            channel = RemoteChannel.TELEGRAM,
+            sessionKey = chatId.toString(),
+            displayName = null
+        )
     }
 
     fun deleteMessages(ids: List<Long>) {

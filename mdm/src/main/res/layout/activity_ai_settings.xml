@@ -180,7 +180,9 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="8dp"
                             android:text="测试 API 连接"
-                            app:backgroundTint="@color/mdm_primary" />
+                            android:textColor="@android:color/white"
+                            app:backgroundTint="@color/mdm_primary"
+                            app:iconTint="@android:color/white" />
 
                         <TextView
                             android:id="@+id/tvApiTestResult"

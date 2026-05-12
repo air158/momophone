@@ -108,10 +108,12 @@
                     android:layout_marginTop="@dimen/spacing_sm"
                     android:minHeight="0dp"
                     android:text="@string/execute_now"
+                    android:textColor="@color/on_primary"
                     android:textSize="12sp"
                     android:visibility="gone"
                     app:backgroundTint="@color/primary"
                     app:cornerRadius="8dp"
+                    app:iconTint="@color/on_primary"
                     tools:visibility="visible" />
 
             </LinearLayout>

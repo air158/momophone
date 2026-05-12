@@ -101,8 +101,8 @@ class ChatAdapter(
             // 设置气泡背景和边距
             when {
                 isUser -> {
-                    // 用户气泡 - 渐变蓝色背景
-                    binding.bubbleCard.setBackgroundResource(R.drawable.bg_bubble_user)
+                    // 用户气泡 - 橙色背景（白字）
+                    binding.bubbleCard.setCardBackgroundColor(ContextCompat.getColor(ctx, R.color.bubble_user))
                     binding.bubbleCard.strokeWidth = 0
                     binding.bubbleCard.radius = ctx.resources.getDimension(R.dimen.bubble_corner_radius)
                     binding.tvContent.setTextColor(ContextCompat.getColor(ctx, R.color.on_bubble_user))

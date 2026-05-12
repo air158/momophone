@@ -54,8 +54,8 @@ class StatusOverlayService : Service() {
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 32
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            x = 0
             y = 160
         }
         params = lp
@@ -92,6 +92,19 @@ class StatusOverlayService : Service() {
             else com.andforce.andclaw.R.drawable.bg_dot_idle
         )
         b.label.text = if (running) "Running" else "Idle"
+
+        val latest = AgentController.messages.value
+            .lastOrNull { it.role == "ai" || it.role == "system" }
+        val snippet = latest?.content?.lineSequence()
+            ?.firstOrNull { it.isNotBlank() }
+            ?.trim()
+            ?.take(60)
+        if (running && !snippet.isNullOrEmpty()) {
+            b.output.text = snippet
+            b.output.visibility = View.VISIBLE
+        } else {
+            b.output.visibility = View.GONE
+        }
     }
 
     override fun onDestroy() {
