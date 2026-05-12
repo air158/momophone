@@ -30,6 +30,7 @@ import java.util.concurrent.TimeUnit
 object Utils {
     private const val TAG = "AgentLLM"
     private const val MAX_HTTP_RESPONSE_CHARS = 48_000
+    private const val PLANNER_MAX_TOKENS = 1024
 
     private val httpAgentClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -577,13 +578,17 @@ Rules:
             val isKimi = config.provider.equals("Kimi Code", ignoreCase = true)
             Log.d(TAG, "$logLabel: provider=${config.provider}, isKimi=$isKimi, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${maskKey(config.apiKey)}")
             if (isKimi) {
+                val startedAt = SystemClock.elapsedRealtime()
                 return@withContext KimiApiClient.chat(
                     messages = listOf(KimiMessage("user", userPrompt)),
                     system = systemPrompt,
                     apiKey = config.apiKey,
                     baseUrl = config.apiUrl.ifEmpty { "https://api.kimi.com/coding" },
-                    model = config.model.ifEmpty { "kimi-k2.5" }
-                )
+                    model = config.model.ifEmpty { "kimi-k2.5" },
+                    maxTokens = PLANNER_MAX_TOKENS
+                ).also {
+                    Log.d(TAG, "$logLabel Kimi finished duration=${formatDuration(SystemClock.elapsedRealtime() - startedAt)} responseChars=${it.length}")
+                }
             }
 
             val url = if (config.apiUrl.contains("chat/completions")) config.apiUrl
@@ -597,6 +602,7 @@ Rules:
                 if (!config.model.contains("k2.5")) {
                     put("temperature", 0.0)
                 }
+                put("max_tokens", PLANNER_MAX_TOKENS)
                 put("response_format", JSONObject().put("type", "json_object"))
             }.toString()
             val request = Request.Builder()
