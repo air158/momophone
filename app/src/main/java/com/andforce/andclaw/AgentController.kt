@@ -546,7 +546,8 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 userInput, screenData, historyContext, config, appContext,
                 isDeviceOwner = isDeviceOwner,
                 screenshotBase64 = finalScreenshot,
-                planContext = planManager.toPromptContext(activePlan),
+                planContextStable = planManager.toPromptContextStable(activePlan),
+                planContextVolatile = planManager.toPromptContextVolatile(activePlan),
                 logLabel = "agentStep#${stepTiming.id}"
             )
             stepTiming.mark("llm_response_received", "chars=${response.length}")
@@ -563,7 +564,8 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 response = Utils.callLLMWithHistory(
                     userInput, screenData, retryHistory, config, appContext,
                     isDeviceOwner = isDeviceOwner,
-                    planContext = planManager.toPromptContext(activePlan),
+                    planContextStable = planManager.toPromptContextStable(activePlan),
+                    planContextVolatile = planManager.toPromptContextVolatile(activePlan),
                     logLabel = "agentStep#${stepTiming.id}-retry"
                 )
                 stepTiming.mark("llm_retry_response_received", "chars=${response.length}")

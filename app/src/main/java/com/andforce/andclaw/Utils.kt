@@ -744,6 +744,8 @@ Rules:
         isDeviceOwner: Boolean = false,
         screenshotBase64: String? = null,
         planContext: String? = null,
+        planContextStable: String? = null,
+        planContextVolatile: String? = null,
         logLabel: String = "agentStep"
     ): String = withContext(Dispatchers.IO) {
 
@@ -752,12 +754,23 @@ Rules:
         }
 
         try {
-            val systemPrompt = buildAgentSystemPrompt(userGoal, isDeviceOwner)
+            val baseSystemPrompt = buildAgentSystemPrompt(userGoal, isDeviceOwner)
+            // Append the stable plan skeleton to the system prompt so it lives
+            // inside the prefix-cacheable prefix. Keep volatile/per-step data
+            // (current step pointer, evidence, observations) in the trailing
+            // user message where it belongs.
+            val systemPrompt = planContextStable?.takeIf { it.isNotBlank() }?.let {
+                "$baseSystemPrompt\n\n=== LONG-TERM PLAN (skeleton) ===\n$it"
+            } ?: baseSystemPrompt
             Log.d(TAG, "callLLMWithHistory: provider=${config.provider}, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${maskKey(config.apiKey)}")
 
-            val planHint = planContext?.takeIf { it.isNotBlank() }?.let {
-                "Long-term Plan Context:\n$it\n\n"
-            }.orEmpty()
+            val planHint = when {
+                !planContextVolatile.isNullOrBlank() ->
+                    "Long-term Plan State:\n$planContextVolatile\n\n"
+                !planContext.isNullOrBlank() ->
+                    "Long-term Plan Context:\n$planContext\n\n"
+                else -> ""
+            }
 
             val screenHint = if (screenshotBase64 != null) {
                 val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager

@@ -323,6 +323,74 @@ If the plan no longer fits the observed screen, explain the blocker in reason an
 		""".trimIndent()
     }
 
+    /**
+     * Stable portion of the plan context — meant to be appended to the system
+     * prompt so it lives inside the prefix-cacheable prefix. Only the plan
+     * skeleton: id, goal, step list with titles/descriptions/status. No
+     * evidence, no observations, no current-step pointer — those change every
+     * step and would invalidate the cache.
+     */
+    fun toPromptContextStable(plan: AgentPlan?): String? {
+        if (plan == null) return null
+        val stepLines = plan.steps.joinToString("\n") { step ->
+            val details = mutableListOf(
+                "- ${step.id} [${step.status}]: ${step.title} (${step.type})",
+                "  description: ${step.description}"
+            )
+            step.lastError?.takeIf { it.isNotBlank() }?.let { lastError ->
+                details += "  last_error: $lastError"
+            }
+            details.joinToString("\n")
+        }
+        return """
+Long-term plan id: ${plan.id}
+Goal: ${plan.goal}
+Steps:
+$stepLines
+
+Use current_step_id in your JSON response. If the current step is complete, continue with the next unfinished step.
+Preserve the user's original goal wording exactly. Do not add new semantic requirements while verifying or executing later steps.
+If the plan no longer fits the observed screen, explain the blocker in reason and choose a safer next action.
+        """.trimIndent()
+    }
+
+    /**
+     * Volatile portion of the plan context — current pointer + recent evidence
+     * for the current step + recent memory. Sent in the final user message
+     * every step.
+     */
+    fun toPromptContextVolatile(plan: AgentPlan?): String? {
+        if (plan == null) return null
+        val current = plan.steps.firstOrNull { it.id == plan.currentStepId }
+        val currentEvidence = current?.evidence?.takeLast(3)?.joinToString("\n") { "  evidence: $it" }.orEmpty()
+        val observations = plan.memory.observations.takeLast(5).joinToString("\n") { "- $it" }.ifBlank { "- None" }
+        val decisions = plan.memory.decisions.takeLast(5).joinToString("\n") { "- $it" }.ifBlank { "- None" }
+        val blockers = plan.memory.blockers.takeLast(5).joinToString("\n") { "- $it" }.ifBlank { "- None" }
+        val currentBlock = if (current != null) {
+            buildString {
+                append("Current step: ${current.id} [${current.status}] - ${current.title}\n")
+                if (currentEvidence.isNotBlank()) {
+                    append(currentEvidence)
+                    append('\n')
+                }
+            }
+        } else {
+            "Current step: none\n"
+        }
+        return """
+Plan status: ${plan.status}
+$currentBlock
+Recent observations:
+$observations
+
+Recent decisions:
+$decisions
+
+Recent blockers:
+$blockers
+        """.trimIndent()
+    }
+
     fun toVerifierPromptContext(plan: AgentPlan?): String? {
         if (plan == null) return null
         val currentIndex = plan.steps.indexOfFirst { it.id == plan.currentStepId }.coerceAtLeast(0)
