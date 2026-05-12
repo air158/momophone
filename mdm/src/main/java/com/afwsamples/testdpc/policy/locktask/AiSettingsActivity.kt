@@ -2,6 +2,7 @@ package com.afwsamples.testdpc.policy.locktask
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
@@ -182,11 +183,13 @@ class AiSettingsActivity : AppCompatActivity() {
                 readTimeout = 30000
                 doOutput = true
             }
+            val startedAt = SystemClock.elapsedRealtime()
             conn.outputStream.use { it.write(body.toString().toByteArray()) }
 
             val code = conn.responseCode
             val respBody = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.readText() ?: ""
+            val elapsedMs = SystemClock.elapsedRealtime() - startedAt
             conn.disconnect()
 
             if (code in 200..299) {
@@ -195,13 +198,17 @@ class AiSettingsActivity : AppCompatActivity() {
                     .getJSONObject(0)
                     .getJSONObject("message")
                     .getString("content")
-                "连接成功 ✓\n模型回复: ${text.take(100)}" to false
+                "连接成功 ✓\n时延: ${formatLatency(elapsedMs)}\n模型回复: ${text.take(100)}" to false
             } else {
-                "连接失败 (HTTP $code)\n$respBody" to true
+                "连接失败 (HTTP $code)\n时延: ${formatLatency(elapsedMs)}\n$respBody" to true
             }
         } catch (e: Exception) {
             "连接失败: ${e.message}" to true
         }
+    }
+
+    private fun formatLatency(ms: Long): String {
+        return if (ms < 1000) "${ms}ms" else String.format("%.2fs", ms / 1000.0)
     }
 
     private fun showApiResult(text: String, isError: Boolean) {
