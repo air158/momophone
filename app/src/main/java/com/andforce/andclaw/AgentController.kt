@@ -641,7 +641,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 "ai" -> {
                     val action = message.action ?: return@forEach
                     if (assistantActions < 3) {
-                        selected += mapOf("role" to "assistant", "content" to compactPromptText(gson.toJson(action), 900))
+                        selected += mapOf("role" to "assistant", "content" to compactPromptText(compactActionForHistory(action), 900))
                         assistantActions++
                     }
                 }
@@ -671,6 +671,67 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private fun compactPromptText(text: String, maxChars: Int): String {
         val oneLine = text.replace(Regex("\\s+"), " ").trim()
         return if (oneLine.length <= maxChars) oneLine else oneLine.take(maxChars) + "...[truncated]"
+    }
+
+    /**
+     * Render a past AiAction as a single compact line for LLM history. Gson's
+     * default serialization always includes the numeric zero defaults
+     * (x/y/end_x/end_y/duration), which inflates each historical turn by ~60
+     * tokens of pure noise. The agent only needs to recall WHAT it did and
+     * WHY — coordinates rarely re-inform the next decision, so we drop them
+     * unless they actually carry signal.
+     */
+    private fun compactActionForHistory(action: AiAction): String {
+        val verb = when (action.type) {
+            AiAction.TYPE_CLICK -> buildString {
+                append("click")
+                action.nodeId?.let { append(" node=").append(it) }
+                if (action.nodeId == null && (action.x != 0 || action.y != 0)) {
+                    append(" @").append(action.x).append(',').append(action.y)
+                }
+                action.targetText?.takeIf { it.isNotBlank() }?.let {
+                    append(" \"").append(it.take(60)).append('"')
+                }
+            }
+            AiAction.TYPE_TEXT_INPUT -> "text_input \"${action.text.orEmpty().take(120)}\""
+            AiAction.TYPE_SWIPE -> buildString {
+                append("swipe ").append(action.x).append(',').append(action.y)
+                    .append("->").append(action.endX).append(',').append(action.endY)
+                if (action.duration > 0) append(" dur=").append(action.duration)
+            }
+            AiAction.TYPE_LONG_PRESS -> buildString {
+                append("long_press @").append(action.x).append(',').append(action.y)
+                if (action.duration > 0) append(" dur=").append(action.duration)
+            }
+            AiAction.TYPE_GLOBAL_ACTION -> "global_action ${action.globalAction.orEmpty()}"
+            AiAction.TYPE_INTENT -> buildString {
+                append("intent ").append(action.action.orEmpty().substringAfterLast('.'))
+                action.packageName?.takeIf { it.isNotBlank() }?.let { append(" pkg=").append(it) }
+                action.data?.takeIf { it.isNotBlank() }?.let { append(" data=").append(it.take(120)) }
+            }
+            AiAction.TYPE_HTTP_REQUEST -> "http_request ${action.httpMethod ?: "GET"} ${action.data.orEmpty().take(120)}"
+            AiAction.TYPE_DPM -> buildString {
+                append("dpm ").append(action.dpmAction.orEmpty())
+                action.extras?.takeIf { it.isNotEmpty() }?.let { append(' ').append(it.toString().take(120)) }
+            }
+            AiAction.TYPE_WAIT -> "wait ${action.duration}ms"
+            AiAction.TYPE_CAMERA -> "camera ${action.cameraAction.orEmpty()}"
+            AiAction.TYPE_SCREEN_RECORD -> "screen_record ${action.screenRecordAction.orEmpty()}"
+            AiAction.TYPE_AUDIO_RECORD -> "audio_record ${action.audioRecordAction.orEmpty()}"
+            AiAction.TYPE_VOLUME -> "volume ${action.volumeAction.orEmpty()}"
+            AiAction.TYPE_DOWNLOAD -> "download ${action.data.orEmpty().take(120)}"
+            AiAction.TYPE_SCREENSHOT -> "screenshot"
+            AiAction.TYPE_WAKE_SCREEN -> "wake_screen"
+            AiAction.TYPE_FINISH -> "finish"
+            AiAction.TYPE_ERROR -> "error"
+            else -> action.type
+        }
+        val parts = mutableListOf(verb)
+        action.currentStepId?.takeIf { it.isNotBlank() }?.let { parts += "step=$it" }
+        action.progress?.takeIf { it.isNotBlank() }?.let { parts += "progress=\"${it.take(120)}\"" }
+        action.reason?.takeIf { it.isNotBlank() }?.let { parts += "reason=\"${it.take(160)}\"" }
+        if (!action.nextActions.isNullOrEmpty()) parts += "batch=${action.nextActions.size}"
+        return parts.joinToString(" | ")
     }
 
     private fun nextNetworkRetryDelayMs(): Long {
