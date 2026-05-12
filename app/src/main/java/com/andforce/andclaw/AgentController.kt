@@ -647,10 +647,10 @@ object AgentController : ITgBridgeService, IAiConfigService {
         var userMessages = 0
 
         messages.asReversed().forEach { message ->
-            if (selected.size >= 6) return@forEach
+            if (selected.size >= 20) return@forEach
             when (message.role) {
                 "user" -> {
-                    if (userMessages < 1) {
+                    if (userMessages < 2) {
                         selected += mapOf("role" to "user", "content" to compactPromptText(message.content, 700))
                         userMessages++
                     }
@@ -658,7 +658,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
                 "ai" -> {
                     val action = message.action ?: return@forEach
-                    if (assistantActions < 3) {
+                    if (assistantActions < 12) {
                         selected += mapOf("role" to "assistant", "content" to compactPromptText(compactActionForHistory(action), 900))
                         assistantActions++
                     }
@@ -675,7 +675,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                         content.startsWith("Click blocked:") ||
                         content.startsWith("No focused input field") ||
                         (content.startsWith("Action success.") && content.contains("\n"))
-                    if (shouldKeep && systemFeedback < 2) {
+                    if (shouldKeep && systemFeedback < 6) {
                         selected += mapOf("role" to "user", "content" to "System feedback: ${compactPromptText(content, 700)}")
                         systemFeedback++
                     }
