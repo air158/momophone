@@ -21,8 +21,12 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.io.IOException
 import java.net.SocketTimeoutException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 object Utils {
@@ -38,6 +42,39 @@ object Utils {
 
     private fun formatDuration(ms: Long): String =
         if (ms < 1000L) "${ms}ms" else String.format("%.2fs", ms / 1000.0)
+
+    private fun dumpLlmRequest(
+        context: Context,
+        label: String,
+        url: String,
+        config: ApiConfig,
+        requestBody: String
+    ) {
+        runCatching {
+            val dir = File(context.getExternalFilesDir(null), "llm_requests").apply { mkdirs() }
+            val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())
+            val safeLabel = label.replace(Regex("[^A-Za-z0-9._-]+"), "_").take(48)
+            val baseName = "${timestamp}_${safeLabel}_${config.model.replace(Regex("[^A-Za-z0-9._-]+"), "_")}"
+            val bodyFile = File(dir, "$baseName.body.json")
+            val metaFile = File(dir, "$baseName.meta.json")
+
+            bodyFile.writeText(JSONObject(requestBody).toString(2))
+            metaFile.writeText(
+                JSONObject().apply {
+                    put("label", label)
+                    put("created_at", timestamp)
+                    put("url", url)
+                    put("provider", config.provider)
+                    put("model", config.model)
+                    put("body_file", bodyFile.absolutePath)
+                    put("curl", "curl -sS -X POST '$url' -H 'Content-Type: application/json' -H 'Authorization: Bearer \$API_KEY' --data-binary '@${bodyFile.name}'")
+                }.toString(2)
+            )
+            Log.d(TAG, "LLM request dumped label=$label body=${bodyFile.absolutePath} meta=${metaFile.absolutePath}")
+        }.onFailure {
+            Log.w(TAG, "Failed to dump LLM request label=$label", it)
+        }
+    }
 
     private val openAiCompatibleClient = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
@@ -590,6 +627,7 @@ Rules:
                 put("max_tokens", PLANNER_MAX_TOKENS)
                 put("response_format", JSONObject().put("type", "json_object"))
             }.toString()
+            dumpLlmRequest(context, logLabel, url, config, requestBody)
             val request = Request.Builder()
                 .url(url)
                 .post(requestBody.toRequestBody("application/json".toMediaType()))
@@ -675,7 +713,8 @@ Rules:
         context: Context,
         isDeviceOwner: Boolean = false,
         screenshotBase64: String? = null,
-        planContext: String? = null
+        planContext: String? = null,
+        logLabel: String = "agentStep"
     ): String = withContext(Dispatchers.IO) {
 
         val errorJsonStub = { message: String ->
@@ -757,6 +796,7 @@ Respond with JSON only."""
             }.toString()
 
             Log.d(TAG, "OpenAI request: url=$url, model=${config.model}, apiKey=${maskKey(config.apiKey)}, historySize=${history.size}, hasScreenshot=${screenshotBase64 != null}")
+            dumpLlmRequest(context, logLabel, url, config, requestBody)
 
             val request = Request.Builder()
                 .url(url)
