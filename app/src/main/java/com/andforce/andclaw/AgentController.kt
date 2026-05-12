@@ -23,6 +23,7 @@ import com.andforce.andclaw.db.ChatMessageEntity
 import com.andforce.andclaw.plan.AgentPlan
 import com.andforce.andclaw.plan.PlanListItem
 import com.andforce.andclaw.plan.PlanManager
+import com.andforce.andclaw.plan.StepType
 import com.andforce.andclaw.plan.StepVerification
 import com.google.gson.Gson
 import com.andforce.andclaw.bridge.RemoteOutboundHelper
@@ -1359,6 +1360,10 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private fun shouldVerifyAfterSuccessfulAction(action: AiAction, actionResult: String?): Boolean {
         if (planManager.toPromptContext(activePlan) == null) return false
         if (actionResult?.contains("recovered", ignoreCase = true) == true) return true
+        val currentStepType = activePlan
+            ?.steps
+            ?.firstOrNull { it.id == activePlan?.currentStepId }
+            ?.type
         return when (action.type) {
             AiAction.TYPE_INTENT,
             AiAction.TYPE_GLOBAL_ACTION,
@@ -1373,17 +1378,20 @@ object AgentController : ITgBridgeService, IAiConfigService {
             AiAction.TYPE_CLICK,
             AiAction.TYPE_TEXT_INPUT,
             AiAction.TYPE_SWIPE,
-            AiAction.TYPE_LONG_PRESS -> routineSuccessSinceVerifier >= 2
+            AiAction.TYPE_LONG_PRESS -> {
+                currentStepType in setOf(StepType.VERIFY, StepType.DECISION) ||
+                    routineSuccessSinceVerifier >= 5
+            }
 
             else -> false
         }
     }
 
     private suspend fun verifyCurrentPlanStep(actionResult: String?) {
-        val planContext = planManager.toPromptContext(activePlan) ?: return
+        val planContext = planManager.toVerifierPromptContext(activePlan) ?: return
         activeStepTiming?.mark("plan_verifier_started")
         val screenData = AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
-        activeStepTiming?.mark("plan_verifier_screen_captured", "chars=${screenData.length}")
+        activeStepTiming?.mark("plan_verifier_screen_captured", "chars=${screenData.length}, plan_chars=${planContext.length}")
         val response = Utils.callStepVerifier(
             userGoal = uiState.userInput,
             screenData = screenData,

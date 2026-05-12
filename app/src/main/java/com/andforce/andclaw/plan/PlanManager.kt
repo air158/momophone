@@ -320,7 +320,53 @@ $blockers
 Use current_step_id in your JSON response. If the current step is complete, continue with the next unfinished step.
 Preserve the user's original goal wording exactly. Do not add new semantic requirements while verifying or executing later steps.
 If the plan no longer fits the observed screen, explain the blocker in reason and choose a safer next action.
-	""".trimIndent()
+		""".trimIndent()
+    }
+
+    fun toVerifierPromptContext(plan: AgentPlan?): String? {
+        if (plan == null) return null
+        val currentIndex = plan.steps.indexOfFirst { it.id == plan.currentStepId }.coerceAtLeast(0)
+        val relevantSteps = plan.steps
+            .mapIndexedNotNull { index, step ->
+                val isRelevant = index == currentIndex ||
+                    index == currentIndex + 1 ||
+                    step.status == StepStatus.BLOCKED ||
+                    step.status == StepStatus.FAILED
+                if (isRelevant) step else null
+            }
+            .distinctBy { it.id }
+
+        val stepLines = relevantSteps.joinToString("\n") { step ->
+            val details = mutableListOf(
+                "- ${step.id} [${step.status}]: ${step.title} (${step.type})",
+                "  done_when: ${step.description}"
+            )
+            step.evidence.takeLast(1).forEach { evidence ->
+                details += "  evidence: $evidence"
+            }
+            step.lastError?.takeIf { it.isNotBlank() }?.let { lastError ->
+                details += "  last_error: $lastError"
+            }
+            details.joinToString("\n")
+        }.ifBlank { "- None" }
+
+        val observations = plan.memory.observations.takeLast(2).joinToString("\n") { "- $it" }.ifBlank { "- None" }
+        val blockers = plan.memory.blockers.takeLast(2).joinToString("\n") { "- $it" }.ifBlank { "- None" }
+        return """
+Goal: ${plan.goal}
+Plan status: ${plan.status}
+Current step: ${plan.currentStepId ?: "none"}
+Relevant steps:
+$stepLines
+
+Recent observations:
+$observations
+
+Recent blockers:
+$blockers
+
+Verifier scope: decide only whether the current step is done, blocked, or still in progress. If it is done, choose the next unfinished relevant step.
+		""".trimIndent()
     }
 
     fun formatProgress(plan: AgentPlan?, title: String? = null): String? {
