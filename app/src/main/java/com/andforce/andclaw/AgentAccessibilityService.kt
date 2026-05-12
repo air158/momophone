@@ -25,6 +25,7 @@ class AgentAccessibilityService : AccessibilityService() {
     companion object {
         var instance: AgentAccessibilityService? = null
         private const val TAG = "AiAccessibility"
+        private const val LABEL_MAX_CHARS = 60
     }
 
     @Volatile
@@ -155,7 +156,7 @@ class AgentAccessibilityService : AccessibilityService() {
         node.getBoundsInScreen(rect)
         val text = node.text?.toString().orEmpty()
         val description = node.contentDescription?.toString().orEmpty()
-        val label = listOf(text, description).filter { it.isNotBlank() }.distinct().joinToString(" | ")
+        val label = dedupLabelPair(text, description)
         val isRelevant = shouldPromptNode(node, label, rect)
         val ownClickableBounds = if (node.isClickable && !rect.isEmpty) Rect(rect) else null
         val ownClickablePath = if (node.isClickable && !rect.isEmpty) nodePath else null
@@ -251,24 +252,71 @@ class AgentAccessibilityService : AccessibilityService() {
         }
 
         if (imeOpen) sb.append("[Keyboard open]\n")
+
+        // Collapse text-only children whose clickBounds equal their parent's:
+        // these are pure labels of a clickable container, redundant as
+        // standalone node lines. Merge their labels into the parent and drop
+        // the child entirely.
+        val byId = appNodes.associateBy { it.id }
+        val mergedLabels = mutableMapOf<Int, String>()
+        val dropped = HashSet<Int>()
+        appNodes.forEach { node ->
+            val parent = node.parentId?.let { byId[it] } ?: return@forEach
+            if (parent.id in dropped) return@forEach
+            val isPureLabel = !node.editable && !node.scrollable && !node.checkable &&
+                !node.checked && !node.selected && !node.focused &&
+                node.label.isNotBlank() &&
+                node.clickBounds == parent.clickBounds
+            if (!isPureLabel) return@forEach
+            val parentLabel = mergedLabels[parent.id] ?: parent.promptLabel()
+            val combined = mergeLabel(parentLabel, node.label)
+            mergedLabels[parent.id] = combined
+            dropped += node.id
+        }
+
         appNodes
+            .filter { it.id !in dropped }
             .sortedWith(compareBy<UiNodeSnapshot> { it.windowIndex }.thenBy { it.id })
             .forEach { node ->
-                sb.append(node.toPromptLine())
+                sb.append(node.toPromptLine(mergedLabels[node.id]))
                 sb.append('\n')
             }
         return sb.toString()
     }
 
-    private fun UiNodeSnapshot.toPromptLine(): String {
+    private fun mergeLabel(existing: String, addition: String): String {
+        if (existing.isBlank() || existing == "(no label)") return truncateLabel(addition)
+        val a = existing.trim()
+        val b = addition.trim()
+        if (a.equals(b, ignoreCase = true)) return truncateLabel(a)
+        if (a.contains(b, ignoreCase = true)) return truncateLabel(a)
+        if (b.contains(a, ignoreCase = true)) return truncateLabel(b)
+        return truncateLabel("$a | $b")
+    }
+
+    private fun truncateLabel(value: String): String =
+        if (value.length <= LABEL_MAX_CHARS) value else value.take(LABEL_MAX_CHARS - 3) + "..."
+
+    private fun dedupLabelPair(text: String, description: String): String {
+        val t = text.trim()
+        val d = description.trim()
+        return when {
+            t.isBlank() && d.isBlank() -> ""
+            t.isBlank() -> d
+            d.isBlank() -> t
+            t.equals(d, ignoreCase = true) -> t
+            t.contains(d, ignoreCase = true) -> t
+            d.contains(t, ignoreCase = true) -> d
+            else -> "$t | $d"
+        }
+    }
+
+    private fun UiNodeSnapshot.toPromptLine(labelOverride: String? = null): String {
         val indent = "  ".repeat(promptDepth.coerceIn(0, 6))
         val flags = promptFlags().takeIf { it.isNotEmpty() }?.joinToString(",", prefix = " flags=" ).orEmpty()
-        val view = viewId?.substringAfter(":id/")?.takeIf { it.isNotBlank() }?.let { " view=$it" }.orEmpty()
-        val nodeBounds = if (bounds == clickBounds) "" else " node=${bounds.shortRect()}"
-        return "$indent#$id ${promptRole()} \"${escapeUiValue(promptLabel())}\"" +
-            view +
+        val rendered = labelOverride ?: promptLabel()
+        return "$indent#$id ${promptRole()} \"${escapeUiValue(rendered)}\"" +
             " tap=${clickBounds.shortRect()}" +
-            nodeBounds +
             flags
     }
 
@@ -287,9 +335,7 @@ class AgentAccessibilityService : AccessibilityService() {
         val base = label.ifBlank {
             viewId?.substringAfter(":id/")?.takeIf { it.isNotBlank() } ?: "(no label)"
         }
-        return base.replace(Regex("\\s+"), " ").trim().let {
-            if (it.length <= 120) it else it.take(117) + "..."
-        }
+        return base.replace(Regex("\\s+"), " ").trim().let(::truncateLabel)
     }
 
     private fun UiNodeSnapshot.promptFlags(): List<String> = buildList {

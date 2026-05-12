@@ -1348,7 +1348,12 @@ object AgentController : ITgBridgeService, IAiConfigService {
         if (!isAgentRunning) return
         if (shouldVerifyAfterSuccessfulAction(action, actionResult)) {
             routineSuccessSinceVerifier = 0
-            verifyCurrentPlanStep(actionResult)
+            // Run verifier in parallel with the next agent step. Plan mutations
+            // serialize on scope's Main dispatcher, and the verifier's HTTP work
+            // happens off-Main via callStepVerifier. If the verifier finds a
+            // blocker/completion, its result naturally applies to the step after
+            // the one we're about to dispatch — saving one full RTT per check.
+            scope.launch { verifyCurrentPlanStep(actionResult) }
         } else {
             routineSuccessSinceVerifier++
             activeStepTiming?.mark("plan_verifier_skipped", "routine_successes=$routineSuccessSinceVerifier")

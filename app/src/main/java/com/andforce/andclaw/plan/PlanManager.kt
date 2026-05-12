@@ -362,33 +362,30 @@ If the plan no longer fits the observed screen, explain the blocker in reason an
     fun toPromptContextVolatile(plan: AgentPlan?): String? {
         if (plan == null) return null
         val current = plan.steps.firstOrNull { it.id == plan.currentStepId }
-        val currentEvidence = current?.evidence?.takeLast(3)?.joinToString("\n") { "  evidence: $it" }.orEmpty()
-        val observations = plan.memory.observations.takeLast(5).joinToString("\n") { "- $it" }.ifBlank { "- None" }
-        val decisions = plan.memory.decisions.takeLast(5).joinToString("\n") { "- $it" }.ifBlank { "- None" }
-        val blockers = plan.memory.blockers.takeLast(5).joinToString("\n") { "- $it" }.ifBlank { "- None" }
-        val currentBlock = if (current != null) {
-            buildString {
-                append("Current step: ${current.id} [${current.status}] - ${current.title}\n")
-                if (currentEvidence.isNotBlank()) {
-                    append(currentEvidence)
-                    append('\n')
-                }
-            }
+        val sb = StringBuilder()
+        sb.append("Plan status: ${plan.status}\n")
+        if (current != null) {
+            sb.append("Current step: ${current.id} [${current.status}] - ${current.title}\n")
+            // Only the current step's recent evidence is useful — past steps'
+            // evidence already lives in assistant message history.
+            current.evidence.takeLast(2).forEach { sb.append("  evidence: $it\n") }
         } else {
-            "Current step: none\n"
+            sb.append("Current step: none\n")
         }
-        return """
-Plan status: ${plan.status}
-$currentBlock
-Recent observations:
-$observations
-
-Recent decisions:
-$decisions
-
-Recent blockers:
-$blockers
-        """.trimIndent()
+        // Drop "Recent decisions" entirely — it duplicates the assistant action
+        // history that the model already sees. Keep observations/blockers, but
+        // only when non-empty (saves ~120 bytes per step on typical runs).
+        val observations = plan.memory.observations.takeLast(3)
+        if (observations.isNotEmpty()) {
+            sb.append("Recent observations:\n")
+            observations.forEach { sb.append("- $it\n") }
+        }
+        val blockers = plan.memory.blockers.takeLast(3)
+        if (blockers.isNotEmpty()) {
+            sb.append("Recent blockers:\n")
+            blockers.forEach { sb.append("- $it\n") }
+        }
+        return sb.toString().trimEnd()
     }
 
     fun toVerifierPromptContext(plan: AgentPlan?): String? {
