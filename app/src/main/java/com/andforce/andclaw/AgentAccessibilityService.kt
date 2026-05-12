@@ -210,6 +210,34 @@ class AgentAccessibilityService : AccessibilityService() {
         return clicked
     }
 
+    suspend fun clickBestTargetTextAndWaitForCompletion(targetText: String): Boolean {
+        val target = normalizeTargetText(targetText)
+        if (target.isEmpty()) return false
+        val snapshot = lastNodeSnapshots.values
+            .asSequence()
+            .filter { it.enabled && !it.isInputMethodNode() }
+            .mapNotNull { snapshot ->
+                val label = normalizeTargetText(snapshot.label)
+                val score = targetMatchScore(label, target)
+                if (score > 0) snapshot to score else null
+            }
+            .sortedWith(
+                compareByDescending<Pair<UiNodeSnapshot, Int>> { it.second }
+                    .thenByDescending { it.first.clickable }
+                    .thenBy { it.first.bounds.top }
+                    .thenBy { it.first.bounds.left }
+            )
+            .firstOrNull()
+            ?.first
+            ?: return false
+
+        val node = resolveNode(snapshot.windowIndex, snapshot.clickNodePath)
+            ?: resolveNode(snapshot.windowIndex, snapshot.nodePath)
+        val clicked = node?.performAction(AccessibilityNodeInfo.ACTION_CLICK) ?: false
+        if (clicked) waitForUiStabilization(timeoutMs = 900, quietMs = 160, minWaitMs = 260)
+        return clicked
+    }
+
     private fun resolveNode(windowIndex: Int, path: List<Int>): AccessibilityNodeInfo? {
         val root = sortedInteractiveWindows().getOrNull(windowIndex)?.root
             ?: (if (windowIndex == 0) rootInActiveWindow else null)
@@ -278,12 +306,26 @@ class AgentAccessibilityService : AccessibilityService() {
     fun doesNodeAtMatchTarget(x: Int, y: Int, targetText: String): Boolean {
         val root = rootInActiveWindow ?: return true
         val node = findDeepestNodeAt(root, x, y) ?: return true
-        val target = targetText.trim()
+        val target = normalizeTargetText(targetText)
         if (target.isEmpty()) return true
         val labels = collectNodeAndAncestorLabels(node)
         return labels.any { label ->
-            label.contains(target, ignoreCase = true) || target.contains(label, ignoreCase = true)
+            targetMatchScore(normalizeTargetText(label), target) > 0
         }
+    }
+
+    private fun normalizeTargetText(value: String): String =
+        value.lowercase()
+            .replace("按钮", "")
+            .replace("button", "")
+            .replace(Regex("[\\s，,。.:：;；'\"“”‘’()（）\\[\\]{}<>《》|]+"), "")
+            .trim()
+
+    private fun targetMatchScore(label: String, target: String): Int {
+        if (label.isBlank() || target.isBlank()) return 0
+        if (label == target) return 100
+        if (label.contains(target) || target.contains(label)) return 80
+        return 0
     }
 
     private fun findDeepestNodeAt(node: AccessibilityNodeInfo, x: Int, y: Int): AccessibilityNodeInfo? {

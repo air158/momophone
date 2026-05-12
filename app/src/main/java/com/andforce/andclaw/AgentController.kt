@@ -87,6 +87,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private var loopRetryCount = 0
     private var networkRetryCount = 0
     private var ordinaryFailureReplanCount = 0
+    private var routineSuccessSinceVerifier = 0
     private var uiState = AgentUiState()
     private var activePlan: AgentPlan? = null
     private var nextStepId = 1
@@ -412,6 +413,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         loopRetryCount = 0
         networkRetryCount = 0
         ordinaryFailureReplanCount = 0
+        routineSuccessSinceVerifier = 0
         activePlan = planManager.createPlan(input)
         activePlan?.let { plan ->
             addMessage("system", "Long-term plan created: ${planManager.planDir(plan).absolutePath}/plan.md")
@@ -451,6 +453,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         loopRetryCount = 0
         networkRetryCount = 0
         ordinaryFailureReplanCount = 0
+        routineSuccessSinceVerifier = 0
         addMessage("system", "Resuming plan: ${plan.summary}")
         sendRemotePlanProgress(plan, "Plan resumed")
         agentJob = scope.launch {
@@ -539,30 +542,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
             if (finalScreenshot == null) "skipped_auto_screenshot=true" else "provided_by_recovery=true"
         )
 
-        val currentMessages = _messages.value
-        val historyContext = currentMessages.takeLast(12).mapNotNull {
-            when (it.role) {
-                "user" -> mapOf("role" to "user", "content" to it.content)
-                "ai" -> it.action?.let { action ->
-                    mapOf("role" to "assistant", "content" to gson.toJson(action))
-                }
-                "system" -> {
-                    val content = it.content
-                    val shouldKeep = content.startsWith("Intent failed:") ||
-                        content.startsWith("Loop detected") ||
-                        content.startsWith("Execution Exception:") ||
-                        content.startsWith("Error occurred:") ||
-                        content.startsWith("AI Request Failed:") ||
-                        (content.startsWith("Action success.") && content.contains("\n"))
-                    if (shouldKeep) {
-                        mapOf("role" to "user", "content" to "System feedback: $content")
-                    } else {
-                        null
-                    }
-                }
-                else -> null
-            }
-        }
+        val historyContext = buildLlmHistoryContext(_messages.value)
         stepTiming.mark("history_built", "items=${historyContext.size}")
 
         try {
@@ -642,6 +622,57 @@ object AgentController : ITgBridgeService, IAiConfigService {
             normalized.contains("connection failed") ||
             normalized.contains("timeout") ||
             normalized.contains("timed out")
+    }
+
+    private fun buildLlmHistoryContext(messages: List<ChatMessage>): List<Map<String, String>> {
+        val selected = mutableListOf<Map<String, String>>()
+        var assistantActions = 0
+        var systemFeedback = 0
+        var userMessages = 0
+
+        messages.asReversed().forEach { message ->
+            if (selected.size >= 6) return@forEach
+            when (message.role) {
+                "user" -> {
+                    if (userMessages < 1) {
+                        selected += mapOf("role" to "user", "content" to compactPromptText(message.content, 700))
+                        userMessages++
+                    }
+                }
+
+                "ai" -> {
+                    val action = message.action ?: return@forEach
+                    if (assistantActions < 3) {
+                        selected += mapOf("role" to "assistant", "content" to compactPromptText(gson.toJson(action), 900))
+                        assistantActions++
+                    }
+                }
+
+                "system" -> {
+                    val content = message.content
+                    val shouldKeep = content.startsWith("Intent failed:") ||
+                        content.startsWith("Loop detected") ||
+                        content.startsWith("Execution Exception:") ||
+                        content.startsWith("Error occurred:") ||
+                        content.startsWith("AI Request Failed:") ||
+                        content.startsWith("Click target") ||
+                        content.startsWith("Click blocked:") ||
+                        content.startsWith("No focused input field") ||
+                        (content.startsWith("Action success.") && content.contains("\n"))
+                    if (shouldKeep && systemFeedback < 2) {
+                        selected += mapOf("role" to "user", "content" to "System feedback: ${compactPromptText(content, 700)}")
+                        systemFeedback++
+                    }
+                }
+            }
+        }
+
+        return selected.asReversed()
+    }
+
+    private fun compactPromptText(text: String, maxChars: Int): String {
+        val oneLine = text.replace(Regex("\\s+"), " ").trim()
+        return if (oneLine.length <= maxChars) oneLine else oneLine.take(maxChars) + "...[truncated]"
     }
 
     private fun nextNetworkRetryDelayMs(): Long {
@@ -812,16 +843,31 @@ object AgentController : ITgBridgeService, IAiConfigService {
                                 success = withContext(Dispatchers.Main) {
                                     svc.clickNodeAndWaitForCompletion(action.nodeId)
                                 }
+                                if (!success && targetText.isNotEmpty()) {
+                                    withContext(Dispatchers.Main) { svc.captureScreenHierarchy() }
+                                    success = withContext(Dispatchers.Main) {
+                                        svc.clickBestTargetTextAndWaitForCompletion(targetText)
+                                    }
+                                    if (success) outputMsg = "Click target node_id=${action.nodeId} was stale; recovered by target_text '$targetText'"
+                                }
                                 if (!success) outputMsg = "Click target node_id=${action.nodeId} was not found in the latest UI snapshot"
                             } else if (targetText.isNotEmpty()) {
                                 val matchesTarget = withContext(Dispatchers.Main) {
                                     svc.doesNodeAtMatchTarget(action.x, action.y, targetText)
                                 }
                                 if (!matchesTarget) {
-                                    val actual = withContext(Dispatchers.Main) {
-                                        svc.describeNodeAt(action.x, action.y)
-                                    } ?: "unknown element"
-                                    outputMsg = "Click blocked: target_text '$targetText' did not match element at (${action.x},${action.y}): $actual"
+                                    withContext(Dispatchers.Main) { svc.captureScreenHierarchy() }
+                                    success = withContext(Dispatchers.Main) {
+                                        svc.clickBestTargetTextAndWaitForCompletion(targetText)
+                                    }
+                                    if (success) {
+                                        outputMsg = "Click coordinate target_text mismatch recovered by target_text '$targetText'"
+                                    } else {
+                                        val actual = withContext(Dispatchers.Main) {
+                                            svc.describeNodeAt(action.x, action.y)
+                                        } ?: "unknown element"
+                                        outputMsg = "Click blocked: target_text '$targetText' did not match element at (${action.x},${action.y}): $actual"
+                                    }
                                 } else {
                                     success = withContext(Dispatchers.Main) {
                                         svc.clickAndWaitForCompletion(action.x, action.y)
@@ -1302,13 +1348,42 @@ object AgentController : ITgBridgeService, IAiConfigService {
         waitAfterSuccessfulAction(action)
         activeStepTiming?.mark("ui_wait_finished", "type=${action.type}")
         if (!isAgentRunning) return
-        verifyCurrentPlanStep(actionResult)
+        if (shouldVerifyAfterSuccessfulAction(action, actionResult)) {
+            routineSuccessSinceVerifier = 0
+            verifyCurrentPlanStep(actionResult)
+        } else {
+            routineSuccessSinceVerifier++
+            activeStepTiming?.mark("plan_verifier_skipped", "routine_successes=$routineSuccessSinceVerifier")
+        }
         activeStepTiming?.mark("step_complete")
         if (!isAgentRunning) return
         withContext(Dispatchers.Main) {
             addMessage("system", "UI settled. Analyzing next step...")
         }
         executeAgentStep(uiState.userInput)
+    }
+
+    private fun shouldVerifyAfterSuccessfulAction(action: AiAction, actionResult: String?): Boolean {
+        if (planManager.toPromptContext(activePlan) == null) return false
+        if (actionResult?.contains("recovered", ignoreCase = true) == true) return true
+        return when (action.type) {
+            AiAction.TYPE_INTENT,
+            AiAction.TYPE_GLOBAL_ACTION,
+            AiAction.TYPE_DPM,
+            AiAction.TYPE_HTTP_REQUEST,
+            AiAction.TYPE_DOWNLOAD,
+            AiAction.TYPE_CAMERA,
+            AiAction.TYPE_SCREEN_RECORD,
+            AiAction.TYPE_AUDIO_RECORD,
+            AiAction.TYPE_WAKE_SCREEN -> true
+
+            AiAction.TYPE_CLICK,
+            AiAction.TYPE_TEXT_INPUT,
+            AiAction.TYPE_SWIPE,
+            AiAction.TYPE_LONG_PRESS -> routineSuccessSinceVerifier >= 2
+
+            else -> false
+        }
     }
 
     private suspend fun verifyCurrentPlanStep(actionResult: String?) {
