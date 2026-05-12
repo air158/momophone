@@ -197,6 +197,63 @@ App Query (read-only, no side effects):
 - dpm_action: "getUserControlDisabledPackages" — List packages where user control is disabled.
 """ else ""
 
+        val goalLower = userGoal.lowercase()
+        val needsCamera = goalLower.contains("拍照") || goalLower.contains("录像") ||
+            goalLower.contains("相机") || goalLower.contains("photo") ||
+            goalLower.contains("camera") || goalLower.contains("video") || goalLower.contains("selfie")
+        val needsScreenRecord = goalLower.contains("录屏") || goalLower.contains("屏幕录制") ||
+            goalLower.contains("screen record") || goalLower.contains("录制屏幕")
+        val needsVolume = goalLower.contains("音量") || goalLower.contains("静音") ||
+            goalLower.contains("volume") || goalLower.contains("mute")
+        val needsAudioRecord = goalLower.contains("录音") || goalLower.contains("录制音频") ||
+            goalLower.contains("语音录制") || goalLower.contains("audio record")
+
+        val cameraSection = if (needsCamera) """
+
+=== CAMERA ===
+Take photos or record videos using the device camera. Use "camera_action" field:
+- "take_photo" — Take a photo and save to gallery. Camera opens, captures, saves, and closes automatically.
+- "start_video" — Start video recording. Camera stays open during recording.
+- "stop_video" — Stop current video recording and save to gallery.
+IMPORTANT: When user asks to take a photo, selfie, or record a video, ALWAYS use type "camera". Do NOT try to open the system Camera app.
+Example: {"type":"camera","camera_action":"take_photo","progress":"准备拍照","reason":"用户要求拍一张照片"}""" else ""
+
+        val screenRecordSection = if (needsScreenRecord) """
+
+=== SCREEN_RECORD ===
+Record the device screen using MediaProjection. Use "screen_record_action" field:
+- "start_record" — Start screen recording. A system authorization dialog will appear. After using this action, you MUST click the "立即开始" (Start Now) button on the authorization dialog in the NEXT step to begin recording. The video saves to Movies/Andclaw/ as MP4.
+- "stop_record" — Stop current screen recording and save to gallery.
+IMPORTANT: When user asks to record the screen (录屏/屏幕录制), ALWAYS use type "screen_record". This is different from "camera" which uses the physical camera. "screen_record" captures what's displayed on screen.
+IMPORTANT: After "start_record", a system dialog appears asking for permission. You MUST click "立即开始" button in the next step. Do NOT use "finish" until the recording is confirmed started.
+Example: {"type":"screen_record","screen_record_action":"start_record","progress":"准备录屏","reason":"用户要求录制屏幕"}
+Example: {"type":"screen_record","screen_record_action":"stop_record","progress":"停止录屏","reason":"用户要求停止录屏"}""" else ""
+
+        val volumeSection = if (needsVolume) """
+
+=== VOLUME ===
+Control device volume. Use "volume_action" field with one of:
+- "set" — Set volume to a percentage (0-100). Use extras: {"level": 50, "stream": "music"}
+- "adjust_up" — Increase volume by one step
+- "adjust_down" — Decrease volume by one step
+- "mute" — Mute the stream
+- "unmute" — Unmute the stream
+- "get" — Query current volume level
+Optional extras.stream: "music" (default), "ring", "notification", "alarm", "system"
+IMPORTANT: When user asks to change volume, mute, unmute, or query volume level, ALWAYS use type "volume". Do NOT try to open system Settings or use click actions on volume UI.
+Example: {"type":"volume","volume_action":"set","extras":{"level":50,"stream":"music"},"progress":"调整音量","reason":"用户要求将媒体音量设为50%"}
+Example: {"type":"volume","volume_action":"mute","extras":{"stream":"ring"},"progress":"静音铃声","reason":"用户要求将铃声静音"}""" else ""
+
+        val audioRecordSection = if (needsAudioRecord) """
+
+=== AUDIO_RECORD ===
+Record audio using the device microphone. Use "audio_record_action" field:
+- "start_record" — Start audio recording. Microphone starts capturing, the recording page stays open.
+- "stop_record" — Stop current audio recording. The audio file saves to Music/Andclaw/ as M4A.
+IMPORTANT: When user asks to record audio/voice/sound (录音/录制音频/语音录制), ALWAYS use type "audio_record". This is different from "camera" (which uses the physical camera) and "screen_record" (which captures the screen).
+Example: {"type":"audio_record","audio_record_action":"start_record","progress":"准备录音","reason":"用户要求录制一段音频"}
+Example: {"type":"audio_record","audio_record_action":"stop_record","progress":"停止录音","reason":"用户要求停止录音"}""" else ""
+
         return """
 You are an Android Automation Agent. You MUST respond with a single JSON object ONLY. No text, no markdown, no explanation outside the JSON.
 
@@ -290,43 +347,10 @@ Optional "duration" in ms (default 1000, max 10000).
 Use this when the screen shows loading indicators, spinners, or "努力加载中" style messages.
 Example: {"type":"wait","progress":"商家页面加载中","reason":"页面正在加载，等待完成后继续","duration":1000}
 
-=== CAMERA ===
-Take photos or record videos using the device camera. Use "camera_action" field:
-- "take_photo" — Take a photo and save to gallery. Camera opens, captures, saves, and closes automatically.
-- "start_video" — Start video recording. Camera stays open during recording.
-- "stop_video" — Stop current video recording and save to gallery.
-IMPORTANT: When user asks to take a photo, selfie, or record a video, ALWAYS use type "camera". Do NOT try to open the system Camera app.
-Example: {"type":"camera","camera_action":"take_photo","progress":"准备拍照","reason":"用户要求拍一张照片"}
-
-=== SCREEN_RECORD ===
-Record the device screen using MediaProjection. Use "screen_record_action" field:
-- "start_record" — Start screen recording. A system authorization dialog will appear. After using this action, you MUST click the "立即开始" (Start Now) button on the authorization dialog in the NEXT step to begin recording. The video saves to Movies/Andclaw/ as MP4.
-- "stop_record" — Stop current screen recording and save to gallery.
-IMPORTANT: When user asks to record the screen (录屏/屏幕录制), ALWAYS use type "screen_record". This is different from "camera" which uses the physical camera. "screen_record" captures what's displayed on screen.
-IMPORTANT: After "start_record", a system dialog appears asking for permission. You MUST click "立即开始" button in the next step. Do NOT use "finish" until the recording is confirmed started.
-Example: {"type":"screen_record","screen_record_action":"start_record","progress":"准备录屏","reason":"用户要求录制屏幕"}
-Example: {"type":"screen_record","screen_record_action":"stop_record","progress":"停止录屏","reason":"用户要求停止录屏"}
-
-=== VOLUME ===
-Control device volume. Use "volume_action" field with one of:
-- "set" — Set volume to a percentage (0-100). Use extras: {"level": 50, "stream": "music"}
-- "adjust_up" — Increase volume by one step
-- "adjust_down" — Decrease volume by one step
-- "mute" — Mute the stream
-- "unmute" — Unmute the stream
-- "get" — Query current volume level
-Optional extras.stream: "music" (default), "ring", "notification", "alarm", "system"
-IMPORTANT: When user asks to change volume, mute, unmute, or query volume level, ALWAYS use type "volume". Do NOT try to open system Settings or use click actions on volume UI.
-Example: {"type":"volume","volume_action":"set","extras":{"level":50,"stream":"music"},"progress":"调整音量","reason":"用户要求将媒体音量设为50%"}
-Example: {"type":"volume","volume_action":"mute","extras":{"stream":"ring"},"progress":"静音铃声","reason":"用户要求将铃声静音"}
-
-=== AUDIO_RECORD ===
-Record audio using the device microphone. Use "audio_record_action" field:
-- "start_record" — Start audio recording. Microphone starts capturing, the recording page stays open.
-- "stop_record" — Stop current audio recording. The audio file saves to Music/Andclaw/ as M4A.
-IMPORTANT: When user asks to record audio/voice/sound (录音/录制音频/语音录制), ALWAYS use type "audio_record". This is different from "camera" (which uses the physical camera) and "screen_record" (which captures the screen).
-Example: {"type":"audio_record","audio_record_action":"start_record","progress":"准备录音","reason":"用户要求录制一段音频"}
-Example: {"type":"audio_record","audio_record_action":"stop_record","progress":"停止录音","reason":"用户要求停止录音"}
+$cameraSection
+$screenRecordSection
+$volumeSection
+$audioRecordSection
 
 - type: "wake_screen" — Wake up and turn on the screen when it is off. The lock screen (keyguard) is already disabled on this device, so there is NO need to swipe or enter a password after waking. Use this when user asks to light up / wake / turn on / unlock (解锁/点亮/唤醒) the screen.
 Example: {"type":"wake_screen","progress":"唤醒屏幕","reason":"用户要求点亮屏幕"}
@@ -343,10 +367,7 @@ $dpmSection
 9. Use "http_request" when the user needs to call an HTTP API, webhooks, or fetch JSON/text from a URL. Do NOT open a browser for simple API calls.
 10. Use "screenshot" when user asks to capture the screen.
 11. When the screen is loading or transitioning (spinners, "加载中", skeleton screens), use "wait" to pause and re-check. NEVER use "finish" just because the screen is loading.
-12. When user asks to take photos, record videos with camera, or open the camera, ALWAYS use "camera" type. Do NOT try to open the system Camera app.
-13. When user asks to record the screen (录屏/屏幕录制/录制屏幕), ALWAYS use "screen_record" type. This captures the screen display, NOT the camera.
-14. When user asks to change volume, mute, unmute, or query volume level (调音量/静音/音量), ALWAYS use "volume" type. Do NOT open Settings or use click actions.
-15. When user asks to record audio, voice, or sound (录音/录制音频/语音), ALWAYS use "audio_record" type. Do NOT try to open any third-party recorder app.
+${if (needsCamera) "12. When user asks to take photos, record videos with camera, or open the camera, ALWAYS use \"camera\" type. Do NOT try to open the system Camera app.\n" else ""}${if (needsScreenRecord) "13. When user asks to record the screen (录屏/屏幕录制/录制屏幕), ALWAYS use \"screen_record\" type. This captures the screen display, NOT the camera.\n" else ""}${if (needsVolume) "14. When user asks to change volume, mute, unmute, or query volume level (调音量/静音/音量), ALWAYS use \"volume\" type. Do NOT open Settings or use click actions.\n" else ""}${if (needsAudioRecord) "15. When user asks to record audio, voice, or sound (录音/录制音频/语音), ALWAYS use \"audio_record\" type. Do NOT try to open any third-party recorder app.\n" else ""}
 ${if (isDeviceOwner) "16. Use \"dpm\" for device policy / enterprise management.\n17. " else "16. "}Use "finish" ONLY when the goal is fully achieved.
 ${if (isDeviceOwner) "18" else "17"}. If system feedback says an action failed or a loop was detected, you MUST change strategy immediately.
 ${if (isDeviceOwner) "19" else "18"}. If a store or website requires account login and credentials are unavailable, do NOT invent credentials and do NOT loop. Choose another install path or return "finish" with the blocking reason.

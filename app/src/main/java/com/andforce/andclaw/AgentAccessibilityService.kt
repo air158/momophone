@@ -239,8 +239,11 @@ class AgentAccessibilityService : AccessibilityService() {
                     "\n"
             )
         }
+        val imeOpen = nodes.any { it.isInputMethodNode() }
+        if (imeOpen) sb.append("[Keyboard open]\n")
         nodes
             .sortedWith(compareBy<UiNodeSnapshot> { it.windowIndex }.thenBy { it.id })
+            .filter { !it.isInputMethodNode() }
             .forEach { node ->
                 sb.append(node.toPromptLine())
                 sb.append('\n')
