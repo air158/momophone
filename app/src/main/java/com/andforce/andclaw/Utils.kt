@@ -310,6 +310,7 @@ Tap a specific UI element from the current UI tree.
 - Do NOT treat search suggestion rows as the search/submit button. Search suggestions usually contain the query text and are list items; they are often not reliable click targets. The submit button usually has a label/description like "Search", "搜索", "Go", "Enter", "搜索按钮", or a magnifier icon outside the suggestion list. If the goal is to search for a phrase, first click the editable search input, use text_input for the exact phrase, then click the real app search/submit button outside the keyboard/suggestion list.
 - If system feedback says node_id was not found, the UI changed while you were thinking. Re-read the current UI tree and choose a fresh node_id; do not retry the old node_id.
 - NEVER click anything marked flags=ime. That is the keyboard/IME area and may insert a newline or type an unintended key. Use text_input for typing. For submitting a comment/reply/post/message after text input, click the app's own send/post/comment button outside the keyboard.
+- Comment/reply submission: if the UI tree contains a node labeled "发送", "发布", "提交", "评论", "Send", or "Post", you MUST click that node_id. If no such node is present yet after text_input, return a short wait action and re-check; do not guess coordinates near the keyboard or video area.
 - When multiple nearby targets look similar, use the exact label/description from the UI tree in target_text. For example, if the goal is "AI视频", do not click an element whose label is "AI助手".
 
 === SWIPE ===

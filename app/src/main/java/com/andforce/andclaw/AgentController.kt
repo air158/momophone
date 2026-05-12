@@ -842,10 +842,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                                     svc.clickNodeAndWaitForCompletion(action.nodeId)
                                 }
                                 if (!success && targetText.isNotEmpty()) {
-                                    withContext(Dispatchers.Main) { svc.captureScreenHierarchy() }
-                                    success = withContext(Dispatchers.Main) {
-                                        svc.clickBestTargetTextAndWaitForCompletion(targetText)
-                                    }
+                                    success = clickTargetTextAfterRefresh(svc, targetText)
                                     if (success) outputMsg = "Click target node_id=${action.nodeId} was stale; recovered by target_text '$targetText'"
                                 }
                                 if (!success) outputMsg = "Click target node_id=${action.nodeId} was not found in the latest UI snapshot"
@@ -854,10 +851,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                                     svc.doesNodeAtMatchTarget(action.x, action.y, targetText)
                                 }
                                 if (!matchesTarget) {
-                                    withContext(Dispatchers.Main) { svc.captureScreenHierarchy() }
-                                    success = withContext(Dispatchers.Main) {
-                                        svc.clickBestTargetTextAndWaitForCompletion(targetText)
-                                    }
+                                    success = clickTargetTextAfterRefresh(svc, targetText)
                                     if (success) {
                                         outputMsg = "Click coordinate target_text mismatch recovered by target_text '$targetText'"
                                     } else {
@@ -917,8 +911,12 @@ object AgentController : ITgBridgeService, IAiConfigService {
                             val result = withContext(Dispatchers.Main) {
                                 svc.inputText(action.text)
                             }
-                            success = result
-                            if (!result) outputMsg = "No focused input field found"
+                            success = result && waitForInputTextReflected(svc)
+                            if (!result) {
+                                outputMsg = "No focused input field found"
+                            } else if (!success) {
+                                outputMsg = "Text input action returned success, but editable field is still empty"
+                            }
                         }
                     }
 
@@ -1433,10 +1431,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 if (targetText.isEmpty()) {
                     false to "Batched click requires target_text; node_id values do not survive screen recapture"
                 } else {
-                    withContext(Dispatchers.Main) { svc.captureScreenHierarchy() }
-                    val ok = withContext(Dispatchers.Main) {
-                        svc.clickBestTargetTextAndWaitForCompletion(targetText)
-                    }
+                    val ok = clickTargetTextAfterRefresh(svc, targetText)
                     if (ok) true to "Clicked '$targetText'"
                     else false to "Could not resolve target_text '$targetText' on current screen"
                 }
@@ -1476,6 +1471,47 @@ object AgentController : ITgBridgeService, IAiConfigService {
             }
             else -> false to "Action type '${a.type}' is not allowed inside a batched next_actions list"
         }
+    }
+
+    private suspend fun clickTargetTextAfterRefresh(
+        svc: AgentAccessibilityService,
+        targetText: String
+    ): Boolean {
+        val isSubmit = isSubmitTargetText(targetText)
+        withContext(Dispatchers.Main) { svc.captureScreenHierarchy() }
+        if (isSubmit) {
+            val hasInput = withContext(Dispatchers.Main) {
+                !svc.currentEditableText().isNullOrBlank()
+            }
+            if (!hasInput) return false
+
+            val canSubmit = withContext(Dispatchers.Main) {
+                svc.isTargetTextEnabled(targetText)
+            }
+            if (!canSubmit) return false
+        }
+        return withContext(Dispatchers.Main) {
+            svc.clickBestTargetTextAndWaitForCompletion(targetText)
+        }
+    }
+
+    private fun isSubmitTargetText(targetText: String): Boolean {
+        val normalized = targetText.lowercase()
+            .replace(Regex("[\\s，,。.:：;；'\"“”‘’()（）\\[\\]{}<>《》|]+"), "")
+        return listOf("发送", "发送按钮", "发布", "提交", "评论", "send", "post", "submit").any {
+            normalized.contains(it)
+        }
+    }
+
+    private suspend fun waitForInputTextReflected(svc: AgentAccessibilityService): Boolean {
+        repeat(5) { attempt ->
+            val hasInput = withContext(Dispatchers.Main) {
+                !svc.currentEditableText().isNullOrBlank()
+            }
+            if (hasInput) return true
+            if (attempt < 4) delay(120)
+        }
+        return false
     }
 
     private fun shouldVerifyAfterSuccessfulAction(action: AiAction, actionResult: String?): Boolean {

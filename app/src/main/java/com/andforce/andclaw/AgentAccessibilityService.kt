@@ -431,6 +431,32 @@ class AgentAccessibilityService : AccessibilityService() {
         return clicked
     }
 
+    fun isTargetTextEnabled(targetText: String): Boolean {
+        val target = normalizeTargetText(targetText)
+        if (target.isEmpty()) return false
+        return lastNodeSnapshots.values.any { snapshot ->
+            snapshot.enabled &&
+                !snapshot.isInputMethodNode() &&
+                targetMatchScore(normalizeTargetText(snapshot.label), target) > 0
+        }
+    }
+
+    fun currentEditableText(): String? {
+        findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let { node ->
+            node.userVisibleInputText()?.let { return it }
+        }
+        return rootInActiveWindow
+            ?.let { findEditableNode(it) }
+            ?.userVisibleInputText()
+    }
+
+    private fun AccessibilityNodeInfo.userVisibleInputText(): String? {
+        val value = text?.toString()?.trim().orEmpty()
+        if (value.isBlank()) return null
+        val hint = hintText?.toString()?.trim().orEmpty()
+        return value.takeUnless { hint.isNotBlank() && it == hint }
+    }
+
     private fun resolveNode(windowIndex: Int, path: List<Int>): AccessibilityNodeInfo? {
         val root = sortedInteractiveWindows().getOrNull(windowIndex)?.root
             ?: (if (windowIndex == 0) rootInActiveWindow else null)
