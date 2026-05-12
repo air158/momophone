@@ -120,7 +120,17 @@ data class AiAction(
 
     /** 请求头，如 Authorization、Content-Type */
     @SerializedName("http_headers")
-    val httpHeaders: Map<String, String>? = null
+    val httpHeaders: Map<String, String>? = null,
+
+    /**
+     * Optional follow-up actions for batched execution. The agent executes this
+     * action first; if successful and isAgentRunning, it runs each next action
+     * sequentially with target_text re-resolution (because node_id values
+     * change after every screen recapture). Any failure aborts the batch and
+     * the agent falls back to a fresh LLM step.
+     */
+    @SerializedName("next_actions")
+    val nextActions: List<AiAction>? = null
 ) {
     companion object {
         const val TYPE_INTENT = "intent"

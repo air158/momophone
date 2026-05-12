@@ -19,6 +19,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSource
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -33,6 +34,8 @@ object Utils {
     private const val TAG = "AgentLLM"
     private const val MAX_HTTP_RESPONSE_CHARS = 48_000
     private const val PLANNER_MAX_TOKENS = 1024
+    private const val AGENT_LLM_CALL_TIMEOUT_SECONDS = 90L
+    private const val VERIFIER_CALL_TIMEOUT_SECONDS = 45L
 
     private val httpAgentClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -77,12 +80,14 @@ object Utils {
     }
 
     private val openAiCompatibleClient = OkHttpClient.Builder()
+        .callTimeout(AGENT_LLM_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .connectTimeout(60, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
     private val verifierClient = OkHttpClient.Builder()
+        .callTimeout(VERIFIER_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
@@ -350,6 +355,17 @@ Optional "duration" in ms (default 1000, max 10000).
 Use this when the screen shows loading indicators, spinners, or "努力加载中" style messages.
 Example: {"type":"wait","progress":"商家页面加载中","reason":"页面正在加载，等待完成后继续","duration":1000}
 
+=== BATCHING (optional, performance) ===
+You MAY attach an optional "next_actions" array (max 3 items) to a primary action when the next 1-3 UI steps are a deterministic linear sequence whose targets you can name in advance — for example: click an input field → text_input → click the search/submit button. The agent will execute the primary action and then each next_action in order, re-capturing the screen between them.
+Strict rules for next_actions:
+- Allowed types ONLY: "click", "text_input", "swipe", "global_action", "wait". Do NOT batch "intent", "http_request", "dpm", "camera", "screen_record", "audio_record", "screenshot", "download", "wake_screen", or "finish".
+- Every batched "click" MUST include "target_text" — node_id values are remapped on every screen capture, so the agent re-resolves the target by its visible label. A batched click without target_text is rejected.
+- Do NOT batch a step whose decision depends on what the previous step reveals (e.g. picking a video from a list, reading a comment count, choosing between visually similar suggestions). For those, emit a single action and let the agent re-query.
+- If any batched step fails, the agent aborts the rest and re-queries you with the fresh screen — no penalty, just a wasted round-trip. Bias toward shorter, safer batches.
+- A "next_actions" entry must NOT itself contain another "next_actions" — only the top-level action carries the batch.
+Example primary with batch:
+{"type":"click","node_id":12,"target_text":"搜索框","progress":"打开搜索","reason":"先聚焦搜索框，再输入关键词并提交","next_actions":[{"type":"text_input","text":"AI"},{"type":"click","target_text":"搜索","progress":"提交搜索","reason":"输入完成后点击搜索按钮"}]}
+
 $cameraSection
 $screenRecordSection
 $volumeSection
@@ -401,7 +417,8 @@ ${if (needsCamera) "  \"camera_action\": \"take_photo|start_video|stop_video (fo
   "http_method": "GET|POST|PUT|PATCH|DELETE|HEAD (for http_request type, default GET)",
   "http_headers": {"Header-Name": "value"}${if (isDeviceOwner) ",\n  \"dpm_action\": \"DPM operation name (for dpm type)\"" else ""},
   "package_name": "target package (for intent type)",
-  "class_name": "target activity class (for intent type)"
+  "class_name": "target activity class (for intent type)",
+  "next_actions": [ /* optional batched follow-ups, see BATCHING section; omit when in doubt */ ]
 }
 
 CRITICAL: Your entire response must be parseable as JSON. Any non-JSON text will cause a system error.
@@ -815,6 +832,13 @@ Respond with JSON only."""
                 screenHint
             }
 
+            // Streaming is enabled for text-only requests so we can log TTFT
+            // (time-to-first-token). Total wall time is unchanged today, but
+            // TTFT separates prefill latency from decode latency in the
+            // diagnostics — knowing which one dominates is a prerequisite for
+            // any further optimization (e.g. progressive action dispatch).
+            // Multimodal requests stay non-streaming for provider compat.
+            val useStream = screenshotBase64 == null
             val requestBody = JSONObject().apply {
                 put("model", config.model)
                 put("messages", JSONArray().apply {
@@ -836,9 +860,10 @@ Respond with JSON only."""
                 if (screenshotBase64 == null) {
                     put("response_format", JSONObject().put("type", "json_object"))
                 }
+                if (useStream) put("stream", true)
             }.toString()
 
-            Log.d(TAG, "OpenAI request: url=$url, model=${config.model}, apiKey=${maskKey(config.apiKey)}, historySize=${history.size}, hasScreenshot=${screenshotBase64 != null}")
+            Log.d(TAG, "OpenAI request: url=$url, model=${config.model}, apiKey=${maskKey(config.apiKey)}, historySize=${history.size}, hasScreenshot=${screenshotBase64 != null}, stream=$useStream")
             dumpLlmRequest(context, logLabel, url, config, requestBody)
 
             val request = Request.Builder()
@@ -849,18 +874,24 @@ Respond with JSON only."""
 
             val startedAt = SystemClock.elapsedRealtime()
             openAiCompatibleClient.newCall(request).execute().use { response ->
-                Log.d(TAG, "OpenAI HTTP finished code=${response.code} duration=${formatDuration(SystemClock.elapsedRealtime() - startedAt)}")
-                val responseString = response.body.string()
                 if (!response.isSuccessful) {
-                    Log.e(TAG, "OpenAI API Error ${response.code}: $responseString")
+                    val errorBody = response.body.string()
+                    Log.e(TAG, "OpenAI API Error ${response.code}: $errorBody")
+                    Log.d(TAG, "OpenAI HTTP finished code=${response.code} duration=${formatDuration(SystemClock.elapsedRealtime() - startedAt)}")
                     return@withContext errorJsonStub("API Error ${response.code}")
                 }
-
-                return@withContext JSONObject(responseString)
-                    .getJSONArray("choices")
-                    .getJSONObject(0)
-                    .getJSONObject("message")
-                    .getString("content")
+                val content = if (useStream) {
+                    readOpenAiStream(response.body.source(), startedAt, logLabel)
+                } else {
+                    val responseString = response.body.string()
+                    JSONObject(responseString)
+                        .getJSONArray("choices")
+                        .getJSONObject(0)
+                        .getJSONObject("message")
+                        .getString("content")
+                }
+                Log.d(TAG, "OpenAI HTTP finished code=${response.code} duration=${formatDuration(SystemClock.elapsedRealtime() - startedAt)} stream=$useStream chars=${content.length}")
+                return@withContext content
             }
         } catch (e: SocketTimeoutException) {
             e.printStackTrace()
@@ -881,6 +912,40 @@ Respond with JSON only."""
     /**
      * 辅助函数：安全地在主线程弹出 Toast
      */
+    /**
+     * Aggregate an OpenAI-compatible Server-Sent Events stream into a single
+     * content string. Logs TTFT (time to first non-empty delta) so we can
+     * distinguish prefill latency from decode latency in production traces —
+     * the prerequisite for any later progressive-dispatch work.
+     */
+    private fun readOpenAiStream(source: BufferedSource, startedAt: Long, logLabel: String): String {
+        val content = StringBuilder()
+        var firstTokenAt = -1L
+        while (!source.exhausted()) {
+            val line = source.readUtf8Line() ?: break
+            if (line.isBlank() || !line.startsWith("data:")) continue
+            val payload = line.removePrefix("data:").trim()
+            if (payload == "[DONE]") break
+            try {
+                val obj = JSONObject(payload)
+                val choices = obj.optJSONArray("choices") ?: continue
+                if (choices.length() == 0) continue
+                val delta = choices.getJSONObject(0).optJSONObject("delta") ?: continue
+                val chunk = delta.optString("content", "")
+                if (chunk.isNotEmpty()) {
+                    if (firstTokenAt < 0) {
+                        firstTokenAt = SystemClock.elapsedRealtime()
+                        Log.d(TAG, "OpenAI TTFT label=$logLabel ttft=${formatDuration(firstTokenAt - startedAt)}")
+                    }
+                    content.append(chunk)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "stream chunk parse failed: $payload", e)
+            }
+        }
+        return content.toString()
+    }
+
     private fun showToastOnMain(context: Context, message: String) {
         Handler(Looper.getMainLooper()).post {
             Toast.makeText(context, message, Toast.LENGTH_LONG).show()

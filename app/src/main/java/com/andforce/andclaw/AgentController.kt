@@ -1346,6 +1346,18 @@ object AgentController : ITgBridgeService, IAiConfigService {
         waitAfterSuccessfulAction(action)
         activeStepTiming?.mark("ui_wait_finished", "type=${action.type}")
         if (!isAgentRunning) return
+
+        // Drain LLM-batched follow-up actions before scheduling the next LLM
+        // step. Each batched click MUST carry target_text — node_id values are
+        // remapped on every screen capture, so we resolve fresh by label.
+        val batch = action.nextActions.orEmpty().take(3)
+        if (batch.isNotEmpty()) {
+            activeStepTiming?.mark("batch_started", "count=${batch.size}")
+            val executed = runBatchedActions(batch)
+            activeStepTiming?.mark("batch_finished", "executed=$executed of=${batch.size}")
+            if (!isAgentRunning) return
+        }
+
         if (shouldVerifyAfterSuccessfulAction(action, actionResult)) {
             routineSuccessSinceVerifier = 0
             // Run verifier in parallel with the next agent step. Plan mutations
@@ -1364,6 +1376,106 @@ object AgentController : ITgBridgeService, IAiConfigService {
             addMessage("system", "UI settled. Analyzing next step...")
         }
         executeAgentStep(uiState.userInput)
+    }
+
+    /**
+     * Sequentially execute a list of batched follow-up actions emitted in the
+     * primary LLM response under the optional `next_actions` field.
+     *
+     * Why this saves time: a typical "click input → type → click submit" flow
+     * is three round-trips today; if the model commits all three up front, we
+     * compress that to one LLM call. The trade-off is that we cannot trust
+     * node_id values across screen captures (the id allocator restarts each
+     * snapshot), so batched clicks must re-resolve by `target_text`. We bail
+     * out the moment any step fails — the next LLM step then sees a fresh
+     * screen and re-plans.
+     *
+     * Returns the number of batch entries that successfully executed.
+     */
+    private suspend fun runBatchedActions(actions: List<AiAction>): Int {
+        val svc = AgentAccessibilityService.instance ?: return 0
+        var executed = 0
+        for ((idx, raw) in actions.withIndex()) {
+            if (!isAgentRunning) return executed
+            val a = raw.copy(nextActions = null)
+            val (ok, msg) = executeBatchedVerb(a, svc)
+            if (!ok) {
+                withContext(Dispatchers.Main) {
+                    addMessage(
+                        "system",
+                        "Batch ${idx + 1}/${actions.size} aborted (${a.type}): ${msg ?: "failed"}. Re-querying LLM."
+                    )
+                }
+                return executed
+            }
+            executed++
+            withContext(Dispatchers.Main) {
+                activePlan = planManager.recordAction(activePlan, a)
+                val aiDisplay = "[Batch ${idx + 1}/${actions.size}] ${a.reason ?: a.progress ?: a.type}"
+                addMessage("ai", aiDisplay, a)
+                msg?.let { addMessage("system", "Action success.\n$it") }
+            }
+            waitAfterSuccessfulAction(a)
+        }
+        return executed
+    }
+
+    /**
+     * Verb-only dispatch for the safe subset of action types allowed inside a
+     * batch. Intentionally narrower than performConfirmedAction's switch:
+     * intents, http/dpm/camera/recording/finish are not batchable — they
+     * either own their own waits or change the agent lifecycle.
+     */
+    private suspend fun executeBatchedVerb(a: AiAction, svc: AgentAccessibilityService): Pair<Boolean, String?> {
+        return when (a.type) {
+            AiAction.TYPE_CLICK -> {
+                val targetText = a.targetText?.trim().orEmpty()
+                if (targetText.isEmpty()) {
+                    false to "Batched click requires target_text; node_id values do not survive screen recapture"
+                } else {
+                    withContext(Dispatchers.Main) { svc.captureScreenHierarchy() }
+                    val ok = withContext(Dispatchers.Main) {
+                        svc.clickBestTargetTextAndWaitForCompletion(targetText)
+                    }
+                    if (ok) true to "Clicked '$targetText'"
+                    else false to "Could not resolve target_text '$targetText' on current screen"
+                }
+            }
+            AiAction.TYPE_TEXT_INPUT -> {
+                val text = a.text.orEmpty()
+                if (text.isEmpty()) {
+                    false to "text field is empty"
+                } else {
+                    val ok = withContext(Dispatchers.Main) { svc.inputText(text) }
+                    if (ok) true to "Typed text" else false to "No focused input field"
+                }
+            }
+            AiAction.TYPE_SWIPE -> {
+                val dur = if (a.duration > 0) a.duration else 300L
+                val ok = withContext(Dispatchers.Main) {
+                    svc.swipeAndWaitForCompletion(a.x, a.y, a.endX, a.endY, dur)
+                }
+                if (ok) true to "Swiped" else false to "Swipe gesture was cancelled"
+            }
+            AiAction.TYPE_GLOBAL_ACTION -> {
+                val actionId = when (a.globalAction) {
+                    "back" -> AccessibilityService.GLOBAL_ACTION_BACK
+                    "home" -> AccessibilityService.GLOBAL_ACTION_HOME
+                    "recents" -> AccessibilityService.GLOBAL_ACTION_RECENTS
+                    "notifications" -> AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS
+                    "quick_settings" -> AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS
+                    else -> return false to "Unknown global_action: ${a.globalAction}"
+                }
+                withContext(Dispatchers.Main) { svc.globalAction(actionId) }
+                true to "Global action: ${a.globalAction}"
+            }
+            AiAction.TYPE_WAIT -> {
+                val ms = if (a.duration > 0) a.duration.coerceAtMost(10_000) else 1_000L
+                delay(ms)
+                true to "Waited ${ms}ms"
+            }
+            else -> false to "Action type '${a.type}' is not allowed inside a batched next_actions list"
+        }
     }
 
     private fun shouldVerifyAfterSuccessfulAction(action: AiAction, actionResult: String?): Boolean {
