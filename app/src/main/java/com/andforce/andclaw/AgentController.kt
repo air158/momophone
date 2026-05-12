@@ -18,6 +18,7 @@ import com.andforce.andclaw.model.AiAction
 import com.andforce.andclaw.model.ApiConfig
 import com.andforce.andclaw.model.ChatMessage
 import com.afwsamples.testdpc.common.Util
+import com.andforce.andclaw.agent.HistoryBudget
 import com.andforce.andclaw.db.ChatMessageDao
 import com.andforce.andclaw.db.ChatMessageEntity
 import com.andforce.andclaw.plan.AgentPlan
@@ -536,11 +537,24 @@ object AgentController : ITgBridgeService, IAiConfigService {
             if (finalScreenshot == null) "skipped_auto_screenshot=true" else "provided_by_recovery=true"
         )
 
-        val historyContext = buildLlmHistoryContext(_messages.value)
-        stepTiming.mark("history_built", "items=${historyContext.size}")
+        val isDeviceOwner = Util.isDeviceOwner(appContext)
+        val systemPromptTokens = HistoryBudget.estimateTokens(
+            Utils.buildAgentSystemPrompt(userInput, isDeviceOwner)
+        ) + HistoryBudget.estimateTokens(planManager.toPromptContextStable(activePlan))
+        val screenTokens = HistoryBudget.estimateTokens(screenData) +
+            HistoryBudget.estimateTokens(planManager.toPromptContextVolatile(activePlan))
+        val shotTokens = HistoryBudget.screenshotTokens(finalScreenshot)
+        val historyBudget = HistoryBudget.historyBudget(config, systemPromptTokens, screenTokens, shotTokens)
+        val historyContext = buildLlmHistoryContext(_messages.value, historyBudget)
+        val historyTokens = historyContext.sumOf { HistoryBudget.estimateTokens(it["content"]) }
+        stepTiming.mark(
+            "history_built",
+            "items=${historyContext.size} histTok=$historyTokens budget=$historyBudget " +
+                "sys=$systemPromptTokens scr=$screenTokens shot=$shotTokens " +
+                "window=${HistoryBudget.contextWindowFor(config)}"
+        )
 
         try {
-            val isDeviceOwner = Util.isDeviceOwner(appContext)
             Log.d(TAG, "executeAgentStep: calling LLM, provider=${config.provider}, apiKey=${Utils.maskKey(config.apiKey)}, historySize=${historyContext.size}, hasScreenshot=${finalScreenshot != null}")
             var response = Utils.callLLMWithHistory(
                 userInput, screenData, historyContext, config, appContext,
@@ -622,7 +636,11 @@ object AgentController : ITgBridgeService, IAiConfigService {
             normalized.contains("timed out")
     }
 
-    private fun buildLlmHistoryContext(messages: List<ChatMessage>): List<Map<String, String>> {
+    private fun buildLlmHistoryContext(
+        messages: List<ChatMessage>,
+        tokenBudget: Int = Int.MAX_VALUE
+    ): List<Map<String, String>> {
+        // selected[0] 是最新一条；末尾是最老一条。等会返回前再反转。
         val selected = mutableListOf<Map<String, String>>()
         var assistantActions = 0
         var systemFeedback = 0
@@ -662,6 +680,17 @@ object AgentController : ITgBridgeService, IAiConfigService {
                         systemFeedback++
                     }
                 }
+            }
+        }
+
+        // 预算超出时，从最老的开始丢（list 末尾），直到落入预算。
+        // 关键目标（user 输入的 goal）由调用方走 systemPrompt/screenHint 注入，不在这里，
+        // 所以这里再激进地裁，也不会丢掉"要去干嘛"。
+        if (tokenBudget != Int.MAX_VALUE) {
+            var total = selected.sumOf { HistoryBudget.estimateTokens(it["content"]) }
+            while (total > tokenBudget && selected.isNotEmpty()) {
+                val dropped = selected.removeAt(selected.size - 1)
+                total -= HistoryBudget.estimateTokens(dropped["content"])
             }
         }
 
