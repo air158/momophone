@@ -1743,10 +1743,23 @@ object AgentController : ITgBridgeService, IAiConfigService {
     }
 
     private fun sendRemotePlanProgress(plan: AgentPlan?, title: String) {
-        val session = activeRemoteSession ?: return
         val text = planManager.formatProgress(plan, title) ?: return
-        scope.launch(Dispatchers.IO) {
-            sendRemoteText(session, text, includeStepTiming = false)
+        // 总是在本地显示（echoRemote=false 避免 addMessage 再重复发远端）
+        addMessage("system", text, echoRemote = false)
+        val session = activeRemoteSession
+        if (session != null) {
+            // 远程触发的任务：直接发给对应 channel
+            scope.launch(Dispatchers.IO) {
+                sendRemoteText(session, text, includeStepTiming = false)
+            }
+        } else {
+            // 本地触发的任务：把 plan 进度同步到已配置的默认远程频道
+            val fallback = defaultLocalEchoSession()
+            if (fallback != null) {
+                scope.launch(Dispatchers.IO) {
+                    sendRemoteText(fallback, text, includeStepTiming = false)
+                }
+            }
         }
     }
 
@@ -1839,7 +1852,7 @@ object AgentController : ITgBridgeService, IAiConfigService {
         }
     }
 
-    fun addMessage(role: String, content: String, action: AiAction? = null, screenshotBase64: String? = null) {
+    fun addMessage(role: String, content: String, action: AiAction? = null, screenshotBase64: String? = null, echoRemote: Boolean = true) {
         val msg = ChatMessage(role, content, action, screenshotBase64 = screenshotBase64)
         _messages.update { current -> current + msg }
         Log.d(TAG, "[$role]: $content")
@@ -1856,6 +1869,8 @@ object AgentController : ITgBridgeService, IAiConfigService {
                 list.map { if (it.timestamp == msg.timestamp && it.role == msg.role && it.id == 0L) it.copy(id = id) else it }
             }
         }
+
+        if (!echoRemote) return
 
         val activeSession = activeRemoteSession
         if (activeSession != null) {
