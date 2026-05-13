@@ -253,7 +253,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
         if (imeOpen) sb.append("[Keyboard open]\n")
 
-        // Collapse text-only children whose clickBounds equal their parent's:
+        // Pass 1: Collapse text-only children whose clickBounds equal their parent's:
         // these are pure labels of a clickable container, redundant as
         // standalone node lines. Merge their labels into the parent and drop
         // the child entirely.
@@ -274,6 +274,33 @@ class AgentAccessibilityService : AccessibilityService() {
             dropped += node.id
         }
 
+        // Pass 2: drop pure-text leaves whose content is already present as a
+        // segment of an ancestor's label. Apps like Douyin set a single
+        // contentDescription on a comment container ("name,comment text,
+        // time,location,reply,") and ALSO expose each piece as a separate
+        // TextView child. The agent only needs to see the merged container
+        // line; each redundant child line is ~50-100 chars of pure noise.
+        appNodes.forEach { node ->
+            if (node.id in dropped) return@forEach
+            val isPureText = !node.editable && !node.scrollable && !node.checkable &&
+                !node.checked && !node.selected && !node.focused &&
+                !node.clickable && !node.longClickable
+            if (!isPureText) return@forEach
+            val text = node.label.trim()
+            if (text.length < 2) return@forEach
+            var cur = node.parentId?.let { byId[it] }
+            while (cur != null) {
+                if (cur.id !in dropped) {
+                    val ancestorLabel = (cur.label + " | " + (mergedLabels[cur.id] ?: "")).trim()
+                    if (containsLabelSegment(ancestorLabel, text)) {
+                        dropped += node.id
+                        break
+                    }
+                }
+                cur = cur.parentId?.let { byId[it] }
+            }
+        }
+
         appNodes
             .filter { it.id !in dropped }
             .sortedWith(compareBy<UiNodeSnapshot> { it.windowIndex }.thenBy { it.id })
@@ -282,6 +309,30 @@ class AgentAccessibilityService : AccessibilityService() {
                 sb.append('\n')
             }
         return sb.toString()
+    }
+
+    /**
+     * Check whether [needle] appears in [haystack] as a stand-alone label
+     * segment — i.e. surrounded by a label separator (comma in either script,
+     * pipe, space) or at the start/end of the string. This avoids spurious
+     * substring matches like "Sea" inside "Search" while still catching
+     * "宜宾动感鱼" as a segment of "宜宾动感鱼,让机器干...,05-07,...".
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun containsLabelSegment(haystack: String, needle: String): Boolean {
+        if (needle.isEmpty() || haystack.length < needle.length) return false
+        val boundaries = setOf(' ', ',', '，', '|', '、', '\t', '\n')
+        var from = 0
+        while (from <= haystack.length - needle.length) {
+            val idx = haystack.indexOf(needle, from, ignoreCase = true)
+            if (idx < 0) return false
+            val beforeOk = idx == 0 || haystack[idx - 1] in boundaries
+            val end = idx + needle.length
+            val afterOk = end == haystack.length || haystack[end] in boundaries
+            if (beforeOk && afterOk) return true
+            from = idx + 1
+        }
+        return false
     }
 
     private fun mergeLabel(existing: String, addition: String): String {
