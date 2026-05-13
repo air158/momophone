@@ -646,38 +646,59 @@ object AgentController : ITgBridgeService, IAiConfigService {
         var systemFeedback = 0
         var userMessages = 0
 
-        messages.asReversed().forEach { message ->
-            if (selected.size >= 20) return@forEach
-            when (message.role) {
-                "user" -> {
-                    if (userMessages < 2) {
-                        selected += mapOf("role" to "user", "content" to compactPromptText(message.content, 700))
-                        userMessages++
-                    }
-                }
+        // 任务边界截断：从最新往回走，碰到上一个任务的 finish 就停。后面那些
+        // 都是已结束任务的尸体，喂给 LLM 只会徒增 token、产生混淆。
+        run boundary@{
+            messages.asReversed().forEach { message ->
+                if (selected.size >= 20) return@boundary
 
-                "ai" -> {
-                    val action = message.action ?: return@forEach
-                    if (assistantActions < 12) {
-                        selected += mapOf("role" to "assistant", "content" to compactPromptText(compactActionForHistory(action), 900))
-                        assistantActions++
-                    }
-                }
+                // 边界判定：上一个任务结束的 finish 动作，或者 "Finished." 系统消息。
+                val isTaskBoundary = (message.role == "ai" && message.action?.type == AiAction.TYPE_FINISH) ||
+                    (message.role == "system" && message.content.startsWith("Finished."))
+                if (isTaskBoundary) return@boundary
 
-                "system" -> {
-                    val content = message.content
-                    val shouldKeep = content.startsWith("Intent failed:") ||
-                        content.startsWith("Loop detected") ||
-                        content.startsWith("Execution Exception:") ||
-                        content.startsWith("Error occurred:") ||
-                        content.startsWith("AI Request Failed:") ||
-                        content.startsWith("Click target") ||
-                        content.startsWith("Click blocked:") ||
-                        content.startsWith("No focused input field") ||
-                        (content.startsWith("Action success.") && content.contains("\n"))
-                    if (shouldKeep && systemFeedback < 6) {
-                        selected += mapOf("role" to "user", "content" to "System feedback: ${compactPromptText(content, 700)}")
-                        systemFeedback++
+                when (message.role) {
+                    "user" -> {
+                        if (userMessages < 2) {
+                            val compact = compactPromptText(message.content, 700)
+                            // 跳过紧邻重复的 user 消息（loop retry 时同 goal 会重复）
+                            if (selected.firstOrNull()?.let { it["role"] == "user" && it["content"] == compact } != true) {
+                                selected += mapOf("role" to "user", "content" to compact)
+                                userMessages++
+                            }
+                        }
+                    }
+
+                    "ai" -> {
+                        val action = message.action ?: return@forEach
+                        if (assistantActions < 12) {
+                            val compact = compactPromptText(compactActionForHistory(action), 900)
+                            // 跳过紧邻重复的 assistant 消息（同一 action 被 loop retry 重复触发）
+                            if (selected.firstOrNull()?.let { it["role"] == "assistant" && it["content"] == compact } != true) {
+                                selected += mapOf("role" to "assistant", "content" to compact)
+                                assistantActions++
+                            }
+                        }
+                    }
+
+                    "system" -> {
+                        val content = message.content
+                        val shouldKeep = content.startsWith("Intent failed:") ||
+                            content.startsWith("Loop detected") ||
+                            content.startsWith("Execution Exception:") ||
+                            content.startsWith("Error occurred:") ||
+                            content.startsWith("AI Request Failed:") ||
+                            content.startsWith("Click target") ||
+                            content.startsWith("Click blocked:") ||
+                            content.startsWith("No focused input field") ||
+                            (content.startsWith("Action success.") && content.contains("\n"))
+                        if (shouldKeep && systemFeedback < 6) {
+                            val compact = "System feedback: ${compactPromptText(content, 700)}"
+                            if (selected.firstOrNull()?.let { it["role"] == "user" && it["content"] == compact } != true) {
+                                selected += mapOf("role" to "user", "content" to compact)
+                                systemFeedback++
+                            }
+                        }
                     }
                 }
             }
