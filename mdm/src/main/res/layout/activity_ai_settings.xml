@@ -287,6 +287,43 @@
 
                 </com.google.android.material.card.MaterialCardView>
 
+                <!-- 聊天记录管理 -->
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="@dimen/activity_vertical_margin"
+                    app:cardBackgroundColor="@color/mdm_card_background"
+                    app:cardCornerRadius="@dimen/card_corner_radius"
+                    app:cardElevation="@dimen/card_elevation"
+                    app:strokeColor="@color/mdm_card_border"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="@dimen/card_padding">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="聊天记录"
+                            android:textAppearance="@style/TextAppearance.Mdm.Title"
+                            android:textColor="@color/mdm_primary" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btn_clear_chat_history"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/spacing_md"
+                            android:text="清空所有聊天记录"
+                            app:strokeColor="@color/mdm_status_error" />
+
+                    </LinearLayout>
+
+                </com.google.android.material.card.MaterialCardView>
+
                 <!-- 底部留白 -->
                 <View
                     android:layout_width="match_parent"

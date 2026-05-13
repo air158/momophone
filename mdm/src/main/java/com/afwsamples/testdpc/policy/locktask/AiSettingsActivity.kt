@@ -75,7 +75,16 @@ class AiSettingsActivity : AppCompatActivity() {
         binding.btnOpenMdm.setOnClickListener {
             startActivity(Intent(this, SetupKioskModeActivity::class.java))
         }
+        binding.btnClearChatHistory.setOnClickListener { confirmClearChatHistory() }
         binding.btnSave.setOnClickListener { saveAndFinish() }
+    }
+
+    private fun confirmClearChatHistory() {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setMessage("确定要清空所有聊天记录吗？")
+            .setPositiveButton(android.R.string.ok) { _, _ -> aiConfigService.clearChatHistory() }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun observeRemoteChannelSummary() {

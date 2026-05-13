@@ -269,6 +269,10 @@ object AgentController : ITgBridgeService, IAiConfigService {
         return getPrefs().getString("api_key_$provider", "") ?: ""
     }
 
+    override fun clearChatHistory() {
+        clearAllMessages()
+    }
+
     fun getPrefs() = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private fun syncLegacyTgChatIdFromSession(session: RemoteSession?) {
