@@ -94,6 +94,55 @@ class SystemPromptTokenTest {
         assertTrue(p.contains("=== DPM"))
     }
 
+    // ── new gates ───────────────────────────────────────────────────────────
+
+    @Test
+    fun `simple navigation task excludes http_request, download, screenshot sections`() {
+        val p = prompt("打开微信")
+        assertFalse("HTTP_REQUEST section should be absent", p.contains("=== HTTP_REQUEST ==="))
+        assertFalse("DOWNLOAD section should be absent", p.contains("=== DOWNLOAD ==="))
+        assertFalse("SCREENSHOT section should be absent", p.contains("=== SCREENSHOT ==="))
+        assertFalse("http_method schema field should be absent", p.contains("http_method"))
+    }
+
+    @Test
+    fun `api task includes http_request section`() {
+        val p = prompt("调用接口查询用户信息")
+        assertTrue("HTTP_REQUEST section should be present", p.contains("=== HTTP_REQUEST ==="))
+        assertTrue("http_method schema field should be present", p.contains("http_method"))
+    }
+
+    @Test
+    fun `download task includes download section`() {
+        val p = prompt("下载这个apk文件")
+        assertTrue("DOWNLOAD section should be present", p.contains("=== DOWNLOAD ==="))
+    }
+
+    @Test
+    fun `screenshot task includes screenshot section`() {
+        val p = prompt("截图保存到相册")
+        assertTrue("SCREENSHOT section should be present", p.contains("=== SCREENSHOT ==="))
+    }
+
+    @Test
+    fun `simple task excludes search and comment caveats`() {
+        val p = prompt("打开微信")
+        assertFalse("Search-suggestion caveat should be absent", p.contains("Search flows"))
+        assertFalse("Comment caveat should be absent", p.contains("Comment/reply submission"))
+    }
+
+    @Test
+    fun `search task includes search caveat`() {
+        val p = prompt("搜索AI视频")
+        assertTrue("Search caveat should be present", p.contains("Search flows"))
+    }
+
+    @Test
+    fun `comment task includes comment caveat`() {
+        val p = prompt("在抖音评论区发评论")
+        assertTrue("Comment caveat should be present", p.contains("Comment/reply submission"))
+    }
+
     // ── token size sanity ───────────────────────────────────────────────────
 
     @Test
@@ -105,5 +154,30 @@ class SystemPromptTokenTest {
         println("Social prompt: ${social.length} chars")
         println("Savings: $savings chars (~${savings / 4} tokens)")
         assertTrue("Should save at least 2000 chars for typical social task", savings > 2000)
+    }
+
+    @Test
+    fun `dump prompt for real test goal`() {
+        val goal = "在抖音找一个的AI相关的视频，要视频1000赞以上，在评论区找到点赞最多的评论，仿照这个评论发表评论"
+        val p = prompt(goal, isDeviceOwner = false)
+        java.io.File("/tmp/new_system_prompt.txt").writeText(p)
+        println("Wrote ${p.length} chars to /tmp/new_system_prompt.txt")
+    }
+
+    @Test
+    fun `print sizes for representative goals`() {
+        val cases = listOf(
+            "打开微信" to false,
+            "在抖音找一个的AI相关的视频，要视频1000赞以上，在评论区找到点赞最多的评论，仿照这个评论发表评论" to false,
+            "调用接口查询天气" to false,
+            "下载这个apk并安装" to true,
+            "拍照 录屏 录音 调音量 截图 下载 调用接口" to true,
+        )
+        println("\n=== System prompt size by goal ===")
+        for ((goal, owner) in cases) {
+            val p = prompt(goal, owner)
+            val short = if (goal.length > 30) goal.take(28) + "…" else goal
+            println("  ${p.length} chars  owner=$owner  goal=\"$short\"")
+        }
     }
 }

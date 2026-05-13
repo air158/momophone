@@ -219,6 +219,26 @@ App Query (read-only, no side effects):
             goalLower.contains("volume") || goalLower.contains("mute")
         val needsAudioRecord = goalLower.contains("录音") || goalLower.contains("音频") ||
             goalLower.contains("语音录制") || goalLower.contains("audio record")
+        val needsHttp = goalLower.contains("api") || goalLower.contains("接口") ||
+            goalLower.contains("http") || goalLower.contains("webhook") ||
+            goalLower.contains("调用") || goalLower.contains("post请求") ||
+            goalLower.contains("get请求") || goalLower.contains("json") ||
+            goalLower.contains("rest")
+        val needsDownload = goalLower.contains("下载") || goalLower.contains("download") ||
+            goalLower.contains("安装包") || goalLower.contains(".apk") ||
+            goalLower.contains("apk")
+        val needsScreenshot = goalLower.contains("截图") || goalLower.contains("截屏") ||
+            goalLower.contains("screenshot") || goalLower.contains("snapshot")
+        val needsSearchFlow = goalLower.contains("搜索") || goalLower.contains("search") ||
+            goalLower.contains("查找") || goalLower.contains("搜一下") ||
+            goalLower.contains("搜下") || goalLower.contains("find")
+        val needsCommentFlow = goalLower.contains("评论") || goalLower.contains("comment") ||
+            goalLower.contains("回复") || goalLower.contains("发帖") ||
+            goalLower.contains("post") || goalLower.contains("发送") ||
+            goalLower.contains("发布") || goalLower.contains("reply")
+        val needsBrowserHint = goalLower.contains("浏览器") || goalLower.contains("browser") ||
+            goalLower.contains("网页") || goalLower.contains("网站") ||
+            goalLower.contains("url") || goalLower.contains("http")
 
         val cameraSection = if (needsCamera) """
 
@@ -266,6 +286,100 @@ IMPORTANT: When user asks to record audio/voice/sound (录音/录制音频/语�
 Example: {"type":"audio_record","audio_record_action":"start_record","progress":"准备录音","reason":"用户要求录制一段音频"}
 Example: {"type":"audio_record","audio_record_action":"stop_record","progress":"停止录音","reason":"用户要求停止录音"}""" else ""
 
+        val httpSection = if (needsHttp) """
+
+=== HTTP_REQUEST ===
+Call HTTP/HTTPS APIs without opening a browser. Use "data" for the full URL.
+- "http_method": "GET" (default), "POST", "PUT", "PATCH", "DELETE", "HEAD"
+- "text": request body for POST/PUT/PATCH (often JSON); omit for GET
+- "http_headers": optional map, e.g. {"Authorization":"Bearer ...","Content-Type":"application/json"}
+Example GET: {"type":"http_request","data":"https://api.example.com/v1/status","http_method":"GET"}
+Example POST: {"type":"http_request","data":"https://api.example.com/v1/login","http_method":"POST","http_headers":{"Content-Type":"application/json"},"text":"{\"user\":\"a\"}"}""" else ""
+
+        val downloadSection = if (needsDownload) """
+
+=== DOWNLOAD ===
+Download a file directly without opening a browser. Use "data" for the URL.
+Example: {"type":"download","data":"https://example.com/file.apk"}
+After download starts, do NOT just "wait". Check the screen, open downloads list, or navigate to the installer so installation can continue.""" else ""
+
+        val screenshotSection = if (needsScreenshot) """
+
+=== SCREENSHOT ===
+Capture the current screen and save to gallery. No extra parameters needed.
+Example: {"type":"screenshot","progress":"截图保存","reason":"用户要求截图"}""" else ""
+
+        val clickSearchRule = if (needsSearchFlow)
+            "\n- Search flows: do NOT click search-suggestion rows as if they were the submit button. Suggestions are list items that repeat the query text. The real submit button has a label like \"Search\", \"搜索\", \"Go\", \"Enter\" or a magnifier icon outside the suggestion list. Type the exact query into the editable input, then click the app's real search/submit control."
+        else ""
+
+        val clickCommentRule = if (needsCommentFlow)
+            "\n- Comment/reply submission: when text input is done, find a node labeled \"发送\", \"发布\", \"提交\", \"评论\", \"Send\" or \"Post\" and click that node_id. If none is present yet, return a short \"wait\" and re-check; do not guess coordinates near the keyboard."
+        else ""
+
+        val clickBrowserRule = if (needsBrowserHint)
+            "\n- BROWSER/WEBVIEW: if a screenshot is attached showing a browser/web page, trust the screenshot over the UI tree for element positions. After clicking a web input field, use \"text_input\" to type — browser input is handled automatically."
+        else ""
+
+        // Compressed batching section — always on (broadly useful across tasks).
+        val batchingSection = """
+
+=== BATCHING (optional) ===
+You MAY attach "next_actions" (max 3) to a primary action when the next 1-3 steps are deterministic (e.g. click input → text_input → click submit).
+- Allowed inside next_actions: click, text_input, swipe, global_action, wait.
+- Every batched "click" MUST include "target_text" (node_id is remapped each capture; the agent re-resolves by label).
+- Do NOT batch a step whose decision needs to read the next screen (e.g. picking from a list).
+- On any failure the agent aborts the rest and re-queries — bias toward short, safe batches.
+- next_actions entries must NOT nest another next_actions.
+Example: {"type":"click","target_text":"搜索框","next_actions":[{"type":"text_input","text":"AI"},{"type":"click","target_text":"搜索"}]}"""
+
+        // Build action-type list with stable numbering (only include what's in scope).
+        val actionList = buildList {
+            add("\"intent\" — Launch apps, system actions. HIGHEST priority if applicable.")
+            add("\"click\" — Tap a UI element. Prefer \"node_id\"; use x/y only when no node_id exists.")
+            add("\"swipe\" — Swipe/scroll gesture.")
+            add("\"long_press\" — Long press at coordinates.")
+            add("\"text_input\" — Type text into the active input (native or browser).")
+            add("\"global_action\" — System nav (back, home, recents, notifications, quick_settings).")
+            add("\"wait\" — Wait for loading/transition, then re-check.")
+            if (needsScreenshot) add("\"screenshot\" — Take a screenshot and save to gallery.")
+            if (needsDownload) add("\"download\" — Download a file directly by URL.")
+            if (needsHttp) add("\"http_request\" — Call a REST/HTTP API.")
+            if (needsCamera) add("\"camera\" — Take photo / record video via camera.")
+            if (needsScreenRecord) add("\"screen_record\" — Record the screen (MediaProjection).")
+            if (needsVolume) add("\"volume\" — Control device volume.")
+            if (needsAudioRecord) add("\"audio_record\" — Record audio via microphone.")
+            add("\"wake_screen\" — Wake/turn on the screen (keyguard is disabled).")
+            if (isDeviceOwner) add("\"dpm\" — Device Policy Manager (Device Owner only).")
+            add("\"finish\" — Task fully complete.")
+        }.mapIndexed { i, s -> "${i + 1}. $s" }.joinToString("\n")
+
+        // Compose the type-union string for OUTPUT FORMAT.
+        val typeUnion = buildList {
+            add("intent"); add("click"); add("swipe"); add("long_press"); add("text_input")
+            add("global_action"); add("wait")
+            if (needsScreenshot) add("screenshot")
+            if (needsDownload) add("download")
+            if (needsHttp) add("http_request")
+            if (needsCamera) add("camera")
+            if (needsScreenRecord) add("screen_record")
+            if (needsVolume) add("volume")
+            if (needsAudioRecord) add("audio_record")
+            add("wake_screen")
+            if (isDeviceOwner) add("dpm")
+            add("finish")
+        }.joinToString(" | ")
+
+        // Optional schema fields for conditional action types.
+        val condSchemaFields = buildString {
+            if (needsCamera) append("  \"camera_action\": \"take_photo|start_video|stop_video\",\n")
+            if (needsScreenRecord) append("  \"screen_record_action\": \"start_record|stop_record\",\n")
+            if (needsVolume) append("  \"volume_action\": \"set|adjust_up|adjust_down|mute|unmute|get\",\n")
+            if (needsAudioRecord) append("  \"audio_record_action\": \"start_record|stop_record\",\n")
+            if (needsHttp) append("  \"http_method\": \"GET|POST|PUT|PATCH|DELETE|HEAD\",\n  \"http_headers\": {},\n")
+            if (isDeviceOwner) append("  \"dpm_action\": \"DPM operation name\",\n")
+        }
+
         return """
 You are an Android Automation Agent. You MUST respond with a single JSON object ONLY. No text, no markdown, no explanation outside the JSON.
 
@@ -274,19 +388,8 @@ Your Ultimate Goal: "$userGoal"
 You run inside "Andclaw Agent" on an Android device${if (isDeviceOwner) " with Device Owner privileges" else ""}.
 You can see the current screen UI tree and execute actions step by step.
 
-=== ACTION TYPES (pick one per step) ===
-
-1. "intent" — Launch apps, system actions. HIGHEST priority if applicable.
-2. "click" — Tap a specific UI element. Prefer "node_id" from the UI tree; use coordinates only when no node_id exists.
-3. "swipe" — Swipe gesture on screen (scroll, page flip, etc.).
-4. "long_press" — Long press at screen coordinates.
-5. "text_input" — Type text into the active input field (works in both native apps and browsers/WebView).
-6. "global_action" — System-level actions (back, home, notifications, etc.).
-7. "screenshot" — Take a screenshot and save to gallery.
-8. "download" — Download a file directly by URL (no browser needed).
-9. "http_request" — Call a REST/HTTP API (GET/POST/PUT/PATCH/DELETE/HEAD) with OkHttp. Use "data" for full URL (http:// or https://). Optional "http_method" (default GET), optional "text" for request body (JSON or plain text), optional "http_headers" object for headers (e.g. Authorization, Content-Type). Response body (truncated if very large) is shown in the next system message.
-10. "wait" — Wait for page loading or UI transition, then re-check screen.
-${if (needsCamera) "11. \"camera\" — Take photo or record video using device camera.\n" else ""}${if (needsScreenRecord) "12. \"screen_record\" — Record the screen using MediaProjection (start/stop).\n" else ""}${if (needsVolume) "13. \"volume\" — Control device volume (set, adjust, mute/unmute, query).\n" else ""}${if (needsAudioRecord) "14. \"audio_record\" — Record audio using the device microphone (start/stop).\n" else ""}${if (isDeviceOwner) "15. \"dpm\" — Device Policy Manager operations (Device Owner).\n16. " else "11. "}"finish" — Task is fully complete.
+=== ACTION TYPES ===
+$actionList
 
 === INTENT ===
 Open URL/app: action:"android.intent.action.VIEW", data:"https://..."
@@ -300,127 +403,65 @@ Launch specific app: action:"android.intent.action.MAIN", package_name:"com.exam
 Launch by package only: action:"android.intent.action.MAIN", package_name:"com.example"
 
 === CLICK ===
-Tap a specific UI element from the current UI tree.
-- Prefer node_id: {"type":"click","node_id":12,"target_text":"Search"}
-- node_id clicks are executed through Android Accessibility ACTION_CLICK on the node or its clickable parent, not by tapping coordinates.
-- If node_id is unavailable, use x/y at the CENTER of the target and include "target_text" for safety validation.
-- The UI tree is a compact snapshot. Lines like #12 action "Search" tap=[x1,y1,x2,y2] identify a target; use the # number as node_id.
-- "tap" is the actionable area, often the clickable parent of the visible text. Do not invent node_id values.
-- Roles include action, input, scroll, toggle, button, text, and image. Flags include tap, edit, scroll, selected, checked, focused, disabled, and ime.
-- Do NOT treat search suggestion rows as the search/submit button. Search suggestions usually contain the query text and are list items; they are often not reliable click targets. The submit button usually has a label/description like "Search", "搜索", "Go", "Enter", "搜索按钮", or a magnifier icon outside the suggestion list. If the goal is to search for a phrase, first click the editable search input, use text_input for the exact phrase, then click the real app search/submit button outside the keyboard/suggestion list.
-- If system feedback says node_id was not found, the UI changed while you were thinking. Re-read the current UI tree and choose a fresh node_id; do not retry the old node_id.
-- NEVER click anything marked flags=ime. That is the keyboard/IME area and may insert a newline or type an unintended key. Use text_input for typing. For submitting a comment/reply/post/message after text input, click the app's own send/post/comment button outside the keyboard.
-- Comment/reply submission: if the UI tree contains a node labeled "发送", "发布", "提交", "评论", "Send", or "Post", you MUST click that node_id. If no such node is present yet after text_input, return a short wait action and re-check; do not guess coordinates near the keyboard or video area.
-- When multiple nearby targets look similar, use the exact label/description from the UI tree in target_text. For example, if the goal is "AI视频", do not click an element whose label is "AI助手".
+Tap a UI element from the current UI tree.
+- Prefer node_id: {"type":"click","node_id":12,"target_text":"Search"} — executed via Accessibility ACTION_CLICK on the node or its clickable parent.
+- If no node_id available, use x/y at the CENTER of the target and include "target_text" for safety validation.
+- UI tree lines like `#12 action "Search" tap=[x1,y1,x2,y2]` give node_id (the #N). "tap" is the actionable area. Do not invent node_id values.
+- Roles: action, input, scroll, toggle, button, text, image. Flags: tap, edit, scroll, selected, checked, focused, disabled, ime.
+- NEVER click anything marked flags=ime — that is the keyboard/IME. Use text_input for typing.
+- If system feedback says node_id was not found, the UI changed — re-read the tree, pick a fresh node_id; do not retry the old one.
+- When multiple nearby targets look similar, put the exact label/description into target_text.$clickSearchRule$clickCommentRule$clickBrowserRule
 
 === SWIPE ===
-Swipe from (x,y) to (end_x,end_y). Optional "duration" in ms (default 300).
-Scroll down: x:540, y:1500, end_x:540, end_y:500
-Scroll up: x:540, y:500, end_x:540, end_y:1500
-Swipe left: x:900, y:1000, end_x:100, end_y:1000
+Swipe from (x,y) to (end_x,end_y). Optional "duration" ms (default 300).
+Scroll down: x:540,y:1500,end_x:540,end_y:500 — Scroll up: reverse — Swipe left: x:900,y:1000,end_x:100,end_y:1000
 
 === LONG_PRESS ===
-Long press at (x,y). Optional "duration" in ms (default 1000).
+Long press at (x,y). Optional "duration" ms (default 1000).
 
 === TEXT_INPUT ===
-Type text into the active input field. First click the input field, then use text_input.
-Works in both native apps AND browsers/WebView pages.
-Example: {"type":"text_input","text":"Hello World"}
+Type text into the active input field. Click the field first, then text_input. Works in native apps and browsers/WebView.
+Example: {"type":"text_input","text":"Hello"}
 
 === GLOBAL_ACTION ===
-System-level actions. Use "global_action" field with one of:
-- "back" — Press back button
-- "home" — Go to home screen
-- "recents" — Open recent apps
-- "notifications" — Pull down notification shade
-- "quick_settings" — Open quick settings panel
-
-=== SCREENSHOT ===
-Capture the current screen and save to gallery. No extra parameters needed.
-
-=== DOWNLOAD ===
-Download a file directly without opening a browser. Use "data" for the URL.
-Example: {"type":"download","data":"https://example.com/file.apk"}
-
-=== HTTP_REQUEST ===
-Call HTTP/HTTPS APIs without opening a browser. Use "data" for the full URL (supports http:// cleartext and https://).
-- "http_method": "GET" (default), "POST", "PUT", "PATCH", "DELETE", "HEAD"
-- "text": request body for POST/PUT/PATCH (often JSON); omit for GET
-- "http_headers": optional map, e.g. {"Authorization":"Bearer ...","Content-Type":"application/json"}
-Example GET: {"type":"http_request","data":"https://api.example.com/v1/status","http_method":"GET","progress":"查询状态","reason":"用户需要接口返回"}
-Example POST: {"type":"http_request","data":"https://api.example.com/v1/login","http_method":"POST","http_headers":{"Content-Type":"application/json"},"text":"{\"user\":\"a\"}","progress":"调用登录接口","reason":"用户需要登录"}
+"global_action" field: "back" | "home" | "recents" | "notifications" | "quick_settings".
 
 === WAIT ===
-Wait for a page to finish loading or a UI transition to complete, then re-check the screen.
-Optional "duration" in ms (default 1000, max 10000).
-Use this when the screen shows loading indicators, spinners, or "努力加载中" style messages.
-Example: {"type":"wait","progress":"商家页面加载中","reason":"页面正在加载，等待完成后继续","duration":1000}
+Wait for loading/transition then re-check. Optional "duration" ms (default 1000, max 10000). Use this on spinners / "加载中" / skeleton screens. NEVER use "finish" just because the screen is loading.
+Example: {"type":"wait","duration":1000}
 
-=== BATCHING (optional, performance) ===
-You MAY attach an optional "next_actions" array (max 3 items) to a primary action when the next 1-3 UI steps are a deterministic linear sequence whose targets you can name in advance — for example: click an input field → text_input → click the search/submit button. The agent will execute the primary action and then each next_action in order, re-capturing the screen between them.
-Strict rules for next_actions:
-- Allowed types ONLY: "click", "text_input", "swipe", "global_action", "wait". Do NOT batch "intent", "http_request", "dpm", "camera", "screen_record", "audio_record", "screenshot", "download", "wake_screen", or "finish".
-- Every batched "click" MUST include "target_text" — node_id values are remapped on every screen capture, so the agent re-resolves the target by its visible label. A batched click without target_text is rejected.
-- Do NOT batch a step whose decision depends on what the previous step reveals (e.g. picking a video from a list, reading a comment count, choosing between visually similar suggestions). For those, emit a single action and let the agent re-query.
-- If any batched step fails, the agent aborts the rest and re-queries you with the fresh screen — no penalty, just a wasted round-trip. Bias toward shorter, safer batches.
-- A "next_actions" entry must NOT itself contain another "next_actions" — only the top-level action carries the batch.
-Example primary with batch:
-{"type":"click","node_id":12,"target_text":"搜索框","progress":"打开搜索","reason":"先聚焦搜索框，再输入关键词并提交","next_actions":[{"type":"text_input","text":"AI"},{"type":"click","target_text":"搜索","progress":"提交搜索","reason":"输入完成后点击搜索按钮"}]}
-
-$cameraSection
-$screenRecordSection
-$volumeSection
-$audioRecordSection
-
-- type: "wake_screen" — Wake up and turn on the screen when it is off. The lock screen (keyguard) is already disabled on this device, so there is NO need to swipe or enter a password after waking. Use this when user asks to light up / wake / turn on / unlock (解锁/点亮/唤醒) the screen.
-Example: {"type":"wake_screen","progress":"唤醒屏幕","reason":"用户要求点亮屏幕"}
-$dpmSection
+=== WAKE_SCREEN ===
+{"type":"wake_screen"} — turns on the screen. Keyguard is disabled, no swipe/password needed after wake.$screenshotSection$downloadSection$httpSection$batchingSection
+$cameraSection$screenRecordSection$volumeSection$audioRecordSection$dpmSection
 === RULES ===
-1. Use "intent" first if a direct shortcut exists.
-2. Use "click" for on-screen UI elements. Prefer node_id and include target_text whenever the target has visible text or content description.
-3. Use "swipe" for scrolling or page navigation.
-4. Use "text_input" to fill text fields (click the field first, then type). This works in both native apps and browsers.
-5. Use "global_action" for system navigation (back, home, etc.).
-6. BROWSER/WEBVIEW: When a screenshot is attached and shows a browser or web page, the UI tree text may be incomplete or inaccurate. ALWAYS trust the screenshot over the UI tree for determining page content and element positions. In browser pages, after clicking an input field, use "text_input" to type — the system handles browser input automatically.
-7. SEARCH FLOWS: When searching, distinguish between the search input, suggestion rows, app shortcuts, and the final search/submit button. If the user asked to search "AI视频", do not click a suggestion/app entry like "AI助手" or a suggestion row that only repeats "AI视频"; type the exact query into the editable input and use the app's real search/submit control.
-8. Use "download" to download files directly — do NOT open a browser just to download.
-9. Use "http_request" when the user needs to call an HTTP API, webhooks, or fetch JSON/text from a URL. Do NOT open a browser for simple API calls.
-10. Use "screenshot" when user asks to capture the screen.
-11. When the screen is loading or transitioning (spinners, "加载中", skeleton screens), use "wait" to pause and re-check. NEVER use "finish" just because the screen is loading.
-${if (needsCamera) "12. When user asks to take photos, record videos with camera, or open the camera, ALWAYS use \"camera\" type. Do NOT try to open the system Camera app.\n" else ""}${if (needsScreenRecord) "13. When user asks to record the screen (录屏/屏幕录制/录制屏幕), ALWAYS use \"screen_record\" type. This captures the screen display, NOT the camera.\n" else ""}${if (needsVolume) "14. When user asks to change volume, mute, unmute, or query volume level (调音量/静音/音量), ALWAYS use \"volume\" type. Do NOT open Settings or use click actions.\n" else ""}${if (needsAudioRecord) "15. When user asks to record audio, voice, or sound (录音/录制音频/语音), ALWAYS use \"audio_record\" type. Do NOT try to open any third-party recorder app.\n" else ""}
-${if (isDeviceOwner) "16. Use \"dpm\" for device policy / enterprise management.\n17. " else "16. "}Use "finish" ONLY when the goal is fully achieved.
-${if (isDeviceOwner) "18" else "17"}. If system feedback says an action failed or a loop was detected, you MUST change strategy immediately.
-${if (isDeviceOwner) "19" else "18"}. If a store or website requires account login and credentials are unavailable, do NOT invent credentials and do NOT loop. Choose another install path or return "finish" with the blocking reason.
-${if (isDeviceOwner) "20" else "19"}. After a file download starts, do NOT just say "wait". You should check the current screen, open the downloads list, or navigate to the installer so installation can continue.
-${if (isDeviceOwner) "21" else "20"}. Write "progress" and "reason" in the same language as the user's goal.
+1. Use "intent" first when a direct shortcut exists.
+2. Prefer node_id for clicks and include target_text whenever the target has visible text/description.
+3. If an action fails or a loop is detected, CHANGE STRATEGY immediately.
+4. If login is required and credentials are unavailable, do NOT invent credentials and do NOT loop. Pick another path or "finish" with the blocking reason.
+5. Use "finish" ONLY when the goal is fully achieved.
+6. Write "progress" and "reason" in the same language as the user's goal.
 
 === OUTPUT FORMAT ===
-You MUST output ONLY a raw JSON object. No text before or after. No markdown fences. Example:
-{"progress":"已打开相机","reason":"需要切换到录像模式","type":"click","x":540,"y":1800}
+Output ONLY a raw JSON object. No text before/after. No markdown fences.
 
-Full schema:
-{
-  "progress": "Steps completed so far",
+Schema fields:
+  "progress": "steps completed so far",
   "current_step_id": "current long-term plan step id, if a plan is provided",
-  "reason": "Why this step is needed",
-  "type": "intent | click | swipe | long_press | text_input | global_action | screenshot | download | http_request | wait | wake_screen | ${if (needsCamera) "camera | " else ""}${if (needsScreenRecord) "screen_record | " else ""}${if (needsVolume) "volume | " else ""}${if (needsAudioRecord) "audio_record | " else ""}${if (isDeviceOwner) "dpm | " else ""}finish",
-  "action": "intent action string (for intent type)",
-  "data": "URI string (for intent/download/http_request type — full URL for http_request)",
+  "reason": "why this step is needed",
+  "type": "$typeUnion",
+  "action": "intent action string (intent type)",
+  "data": "URI string (intent/download/http_request — full URL for http_request)",
   "extras": {},
   "x": 0, "y": 0,
   "node_id": 0,
-  "target_text": "expected visible text or content description for click validation",
+  "target_text": "expected visible text/description for click validation",
   "end_x": 0, "end_y": 0,
   "duration": 0,
   "text": "text to input (text_input) or raw body (http_request)",
   "global_action": "back|home|recents|notifications|quick_settings",
-${if (needsCamera) "  \"camera_action\": \"take_photo|start_video|stop_video (for camera type)\",\n" else ""}${if (needsScreenRecord) "  \"screen_record_action\": \"start_record|stop_record (for screen_record type)\",\n" else ""}${if (needsVolume) "  \"volume_action\": \"set|adjust_up|adjust_down|mute|unmute|get (for volume type)\",\n" else ""}${if (needsAudioRecord) "  \"audio_record_action\": \"start_record|stop_record (for audio_record type)\",\n" else ""}
-  "http_method": "GET|POST|PUT|PATCH|DELETE|HEAD (for http_request type, default GET)",
-  "http_headers": {"Header-Name": "value"}${if (isDeviceOwner) ",\n  \"dpm_action\": \"DPM operation name (for dpm type)\"" else ""},
-  "package_name": "target package (for intent type)",
-  "class_name": "target activity class (for intent type)",
-  "next_actions": [ /* optional batched follow-ups, see BATCHING section; omit when in doubt */ ]
-}
+$condSchemaFields  "package_name": "target package (intent type)",
+  "class_name": "target activity class (intent type)",
+  "next_actions": [ /* optional, see BATCHING */ ]
 
 CRITICAL: Your entire response must be parseable as JSON. Any non-JSON text will cause a system error.
 """.trimIndent()
