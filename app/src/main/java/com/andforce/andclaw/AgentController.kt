@@ -413,15 +413,14 @@ object AgentController : ITgBridgeService, IAiConfigService {
         networkRetryCount = 0
         ordinaryFailureReplanCount = 0
         routineSuccessSinceVerifier = 0
-        activePlan = planManager.createPlan(input)
-        activePlan?.let { plan ->
-            addMessage("system", "Long-term plan created: ${planManager.planDir(plan).absolutePath}/plan.md")
-            sendRemotePlanProgress(plan, "Plan created")
-        }
-
         Log.d(TAG, "startAgent: provider=${config.provider}, model=${config.model}, apiUrl=${config.apiUrl}, apiKey=${Utils.maskKey(config.apiKey)}")
 
         agentJob = scope.launch {
+            activePlan = withContext(Dispatchers.IO) { planManager.createPlan(input) }
+            activePlan?.let { plan ->
+                addMessage("system", "Long-term plan created: ${planManager.planDir(plan).absolutePath}/plan.md")
+                sendRemotePlanProgress(plan, "Plan created")
+            }
             generateInitialPlan(input)
             executeAgentStep(input)
         }
@@ -485,7 +484,9 @@ object AgentController : ITgBridgeService, IAiConfigService {
 
     private suspend fun generateInitialPlan(input: String) {
         activeStepTiming?.mark("initial_planner_started")
-        val screenData = AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        val screenData = withContext(Dispatchers.Default) {
+            AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        }
         activeStepTiming?.mark("initial_planner_screen_captured", "chars=${screenData.length}")
         val response = Utils.callInitialPlanner(input, screenData, config, appContext)
         activeStepTiming?.mark("initial_planner_response_received", "chars=${response.length}")
@@ -502,7 +503,9 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private suspend fun replanActivePlan(reason: String) {
         val planContext = planManager.toPromptContext(activePlan) ?: return
         activeStepTiming?.mark("replan_started", reason)
-        val screenData = AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        val screenData = withContext(Dispatchers.Default) {
+            AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        }
         activeStepTiming?.mark("replan_screen_captured", "chars=${screenData.length}")
         val response = Utils.callPlanPatchPlanner(
             userGoal = uiState.userInput,
@@ -532,7 +535,9 @@ object AgentController : ITgBridgeService, IAiConfigService {
         stepTiming.mark("remote_typing_sent")
 
         val svc = AgentAccessibilityService.instance
-        val screenData = svc?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        val screenData = withContext(Dispatchers.Default) {
+            svc?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        }
         stepTiming.mark("screen_hierarchy_captured", "chars=${screenData.length}")
 
         val finalScreenshot = screenshotBase64
@@ -1662,7 +1667,9 @@ object AgentController : ITgBridgeService, IAiConfigService {
     private suspend fun verifyCurrentPlanStep(actionResult: String?) {
         val planContext = planManager.toVerifierPromptContext(activePlan) ?: return
         activeStepTiming?.mark("plan_verifier_started")
-        val screenData = AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        val screenData = withContext(Dispatchers.Default) {
+            AgentAccessibilityService.instance?.captureScreenHierarchy() ?: "Screen data inaccessible"
+        }
         activeStepTiming?.mark("plan_verifier_screen_captured", "chars=${screenData.length}, plan_chars=${planContext.length}")
         val response = Utils.callStepVerifier(
             userGoal = uiState.userInput,
